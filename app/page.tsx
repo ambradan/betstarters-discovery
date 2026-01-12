@@ -527,24 +527,28 @@ export default function DiscoveryCockpit() {
   }, [loadData]);
 
   // ==========================================
-  // STT INITIALIZATION
+  // STT INITIALIZATION (runs once)
   // ==========================================
+
+  const sttActiveRef = useRef(false); // Track active state for callbacks
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (SpeechRecognition) {
         setSttSupported(true);
-        recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = true;
-        recognitionRef.current.interimResults = true;
-        recognitionRef.current.lang = 'it-IT';
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'it-IT';
 
-        recognitionRef.current.onresult = (event: any) => {
+        recognition.onresult = (event: any) => {
           for (let i = event.resultIndex; i < event.results.length; i++) {
             if (event.results[i].isFinal) {
               const text = event.results[i][0].transcript;
               const confidence = event.results[i][0].confidence;
+
+              console.log('STT received:', text); // Debug
 
               setTranscripts(prev => [...prev.slice(-15), {
                 text,
@@ -563,27 +567,32 @@ export default function DiscoveryCockpit() {
           }
         };
 
-        recognitionRef.current.onerror = (event: any) => {
+        recognition.onerror = (event: any) => {
           console.warn('STT error:', event.error);
-          if (event.error === 'no-speech' && sttActive) {
-            setTimeout(() => recognitionRef.current?.start(), 100);
-          }
-        };
-
-        recognitionRef.current.onend = () => {
-          if (sttActive) {
+          if (event.error === 'no-speech' && sttActiveRef.current) {
             setTimeout(() => {
-              try { recognitionRef.current?.start(); } catch (e) {}
+              try { recognition.start(); } catch (e) {}
             }, 100);
           }
         };
+
+        recognition.onend = () => {
+          console.log('STT ended, active:', sttActiveRef.current); // Debug
+          if (sttActiveRef.current) {
+            setTimeout(() => {
+              try { recognition.start(); } catch (e) {}
+            }, 100);
+          }
+        };
+
+        recognitionRef.current = recognition;
       }
     }
 
     return () => {
       recognitionRef.current?.stop();
     };
-  }, [sttActive]);
+  }, []); // Empty dependency - only run once
 
   // Process STT buffer and save to database
   const processSTTBuffer = async () => {
@@ -852,16 +861,21 @@ export default function DiscoveryCockpit() {
     setSttSuggestions([]);
     
     try {
+      sttActiveRef.current = true; // Set ref BEFORE starting
       recognitionRef.current?.start();
       setSttActive(true);
+      console.log('STT started'); // Debug
     } catch (e) {
       console.error('Failed to start STT:', e);
+      sttActiveRef.current = false;
     }
   };
 
   const stopSTTSession = async () => {
+    sttActiveRef.current = false; // Set ref BEFORE stopping
     recognitionRef.current?.stop();
     setSttActive(false);
+    console.log('STT stopped'); // Debug
 
     // Update session in database
     if (sttSessionId) {
