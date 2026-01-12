@@ -594,6 +594,20 @@ export default function DiscoveryCockpit() {
     };
   }, []); // Empty dependency - only run once
 
+  // Track last answered question for corrections
+  const lastAnsweredRef = useRef<{ questionId: string; timestamp: number } | null>(null);
+
+  // Detect correction phrases
+  const isCorrection = (text: string): boolean => {
+    const correctionPhrases = [
+      'no aspetta', 'no in realtà', 'scusa', 'volevo dire', 'mi correggo',
+      'no è', 'anzi', 'non è vero', 'sbagliato', 'correzione',
+      'no no', 'aspetta aspetta', 'fermati', 'no intendevo'
+    ];
+    const lowerText = text.toLowerCase();
+    return correctionPhrases.some(phrase => lowerText.includes(phrase));
+  };
+
   // Match transcript to questions - find best matching unanswered question
   const findMatchingQuestion = (text: string): Question | null => {
     const lowerText = text.toLowerCase();
@@ -656,6 +670,60 @@ export default function DiscoveryCockpit() {
     
     const analysis = analyzeTranscript(text);
 
+    // === CHECK FOR CORRECTION ===
+    if (isCorrection(text) && lastAnsweredRef.current) {
+      const timeSinceLastAnswer = Date.now() - lastAnsweredRef.current.timestamp;
+      
+      // Only allow corrections within 2 minutes of last answer
+      if (timeSinceLastAnswer < 120000) {
+        const questionId = lastAnsweredRef.current.questionId;
+        const question = questions.find(q => q.id === questionId);
+        
+        if (question) {
+          console.log('Correction detected for:', question.text);
+          
+          // Extract the correction (remove correction phrase)
+          let correctedText = text;
+          const correctionPhrases = ['no aspetta', 'no in realtà', 'scusa', 'volevo dire', 'mi correggo', 'no è', 'anzi'];
+          for (const phrase of correctionPhrases) {
+            correctedText = correctedText.toLowerCase().replace(phrase, '').trim();
+          }
+          
+          // Detect new mentions
+          const mentionedUserIds = detectMentions(correctedText, users);
+          const mentionedNames = mentionedUserIds.map(id => users.find(u => u.id === id)?.name).filter(Boolean);
+          
+          // Update the answer
+          const { error } = await supabase
+            .from('discovery_questions')
+            .update({
+              answer: correctedText,
+              answered_by: currentUser?.name + ' (STT - corretto)',
+              answered_at: new Date().toISOString(),
+              mentioned_users: mentionedUserIds
+            })
+            .eq('id', questionId);
+
+          if (!error) {
+            setQuestions(prev => prev.map(q => 
+              q.id === questionId 
+                ? { ...q, answer: correctedText, answered_by: currentUser?.name + ' (STT - corretto)', mentioned_users: mentionedUserIds }
+                : q
+            ));
+            
+            setSttSuggestions(prev => [{
+              type: 'correction',
+              content: `🔄 Risposta CORRETTA: "${correctedText.substring(0, 50)}..."${mentionedNames.length ? ` (ora: ${mentionedNames.join(', ')})` : ''}`,
+              priority: 'high'
+            }, ...prev].slice(0, 10));
+            
+            console.log('Corrected answer for:', questionId);
+          }
+        }
+        return; // Don't process as new answer
+      }
+    }
+
     // === AUTO-ANSWER QUESTIONS ===
     const matchedQuestion = findMatchingQuestion(text);
     if (matchedQuestion) {
@@ -684,6 +752,9 @@ export default function DiscoveryCockpit() {
             ? { ...q, answered: true, answer: text, answered_by: currentUser?.name + ' (STT)', mentioned_users: mentionedUserIds }
             : q
         ));
+        
+        // Track for corrections
+        lastAnsweredRef.current = { questionId: matchedQuestion.id, timestamp: Date.now() };
         
         // Show notification
         setSttSuggestions(prev => [{
