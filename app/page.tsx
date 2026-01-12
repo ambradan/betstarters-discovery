@@ -1,5 +1,7 @@
 "use client";
 
+"use client";
+
 // ============================================
 // BETSTARTERS DISCOVERY COCKPIT
 // Production-ready for selfhosting
