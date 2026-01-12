@@ -594,15 +594,109 @@ export default function DiscoveryCockpit() {
     };
   }, []); // Empty dependency - only run once
 
+  // Match transcript to questions - find best matching unanswered question
+  const findMatchingQuestion = (text: string): Question | null => {
+    const lowerText = text.toLowerCase();
+    const words = lowerText.split(/\s+/).filter(w => w.length > 3);
+    
+    let bestMatch: Question | null = null;
+    let bestScore = 0;
+    
+    const unanswered = questions.filter(q => !q.answered);
+    
+    for (const q of unanswered) {
+      const questionWords = q.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      let score = 0;
+      
+      // Check keyword overlap
+      for (const qWord of questionWords) {
+        if (words.some(w => w.includes(qWord) || qWord.includes(w))) {
+          score += 1;
+        }
+      }
+      
+      // Boost for key terms
+      const keyTerms: Record<string, string[]> = {
+        'lead': ['lead', 'prospect', 'cliente', 'contatto'],
+        'tempo': ['tempo', 'giorni', 'settimane', 'mesi', 'durata', 'ttd'],
+        'step': ['step', 'processo', 'fase', 'passaggio'],
+        'tool': ['tool', 'strumento', 'crm', 'software'],
+        'mercato': ['mercato', 'paese', 'regione', 'africa', 'latam', 'argentina'],
+        'chi': ['chi', 'persona', 'team', 'responsabile'],
+      };
+      
+      for (const [key, terms] of Object.entries(keyTerms)) {
+        const questionHasTerm = terms.some(t => q.text.toLowerCase().includes(t));
+        const textHasTerm = terms.some(t => lowerText.includes(t));
+        if (questionHasTerm && textHasTerm) {
+          score += 2;
+        }
+      }
+      
+      // Normalize by question length
+      const normalizedScore = score / Math.max(questionWords.length, 1);
+      
+      if (normalizedScore > bestScore && normalizedScore > 0.3) {
+        bestScore = normalizedScore;
+        bestMatch = q;
+      }
+    }
+    
+    console.log('Best match score:', bestScore, bestMatch?.text?.substring(0, 50));
+    return bestMatch;
+  };
+
   // Process STT buffer and save to database
   const processSTTBuffer = async () => {
     const text = bufferRef.current.trim();
-    if (!text) return;
+    if (!text || text.length < 10) return; // Ignore very short utterances
     
     bufferRef.current = '';
+    console.log('Processing STT buffer:', text);
     
     const analysis = analyzeTranscript(text);
 
+    // === AUTO-ANSWER QUESTIONS ===
+    const matchedQuestion = findMatchingQuestion(text);
+    if (matchedQuestion) {
+      console.log('Matched question:', matchedQuestion.text);
+      
+      // Detect team mentions
+      const mentionedUserIds = detectMentions(text, users);
+      const mentionedNames = mentionedUserIds.map(id => users.find(u => u.id === id)?.name).filter(Boolean);
+      
+      // Auto-save as answer
+      const { error } = await supabase
+        .from('discovery_questions')
+        .update({
+          answered: true,
+          answer: text,
+          answered_by: currentUser?.name + ' (STT)',
+          answered_at: new Date().toISOString(),
+          mentioned_users: mentionedUserIds
+        })
+        .eq('id', matchedQuestion.id);
+
+      if (!error) {
+        // Update local state
+        setQuestions(prev => prev.map(q => 
+          q.id === matchedQuestion.id 
+            ? { ...q, answered: true, answer: text, answered_by: currentUser?.name + ' (STT)', mentioned_users: mentionedUserIds }
+            : q
+        ));
+        
+        // Show notification
+        setSttSuggestions(prev => [{
+          type: 'auto_answer',
+          content: `✅ Risposta salvata per: "${matchedQuestion.text.substring(0, 50)}..."${mentionedNames.length ? ` (menzionati: ${mentionedNames.join(', ')})` : ''}`,
+          priority: 'high'
+        }, ...prev].slice(0, 10));
+        
+        console.log('Auto-answered question:', matchedQuestion.id);
+      }
+    }
+
+    // === EXTRACT KPIs ===
     if (analysis.extractions.length) {
       setSttExtractions(prev => [...analysis.extractions, ...prev].slice(0, 20));
       
