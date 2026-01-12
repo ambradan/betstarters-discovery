@@ -1,0 +1,1527 @@
+// ============================================
+// BETSTARTERS DISCOVERY COCKPIT
+// Production-ready for selfhosting
+// ============================================
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// ============================================
+// SUPABASE CLIENT
+// ============================================
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// ============================================
+// TYPES
+// ============================================
+
+type UserRole = 'owner' | 'team_member' | 'consultant';
+type WorkType = 'fulltime' | 'parttime' | null; // null = non ancora definito
+type ViewMode = 'dashboard' | 'call' | 'team' | 'markets' | 'reports' | 'settings' | 'owner_private';
+
+interface AppUser {
+  id: string;
+  name: string;
+  role: UserRole;
+  pin: string;
+  slug: string;
+  market_focus?: string;
+  work_type: WorkType;
+  location?: string;
+}
+
+interface Project {
+  id: string;
+  name: string;
+  current_projects_month: number;
+  target_projects_month: number;
+  target_timeline_months: number;
+  ttd_current?: number;
+  ttd_target?: number;
+  // Owner private data
+  budget_total?: number;
+  margin_target?: number;
+  strategic_notes?: string;
+}
+
+interface Question {
+  id: string;
+  category: string;
+  text: string;
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  answered: boolean;
+  answer?: string;
+  answered_by?: string;
+  answered_at?: string;
+}
+
+interface TaskDefinition {
+  id: string;
+  name: string;
+  category: string;
+  description?: string;
+}
+
+interface UserTask {
+  id: string;
+  user_id: string;
+  task_id: string;
+  task_name: string;
+  is_custom: boolean;
+  created_at: string;
+}
+
+interface Blocker {
+  id: string;
+  user_id: string;
+  title: string;
+  type: 'process' | 'tool' | 'information' | 'communication' | 'organizational';
+  impact: 'low' | 'medium' | 'high' | 'critical';
+  description: string;
+  status: 'reported' | 'acknowledged' | 'in_progress' | 'resolved';
+  requires_owner: boolean;
+  created_at: string;
+}
+
+interface Suggestion {
+  id: string;
+  user_id: string;
+  category: string;
+  title: string;
+  description: string;
+  expected_benefit?: string;
+  status: 'submitted' | 'under_review' | 'approved' | 'completed' | 'declined';
+  created_at: string;
+}
+
+interface MarketIntel {
+  code: string;
+  name: string;
+  region: string;
+  status: string;
+  regulator: string;
+  summary: string;
+  cultural: string;
+  confidence: 'low' | 'medium' | 'high' | 'verified';
+  updated_at: string;
+}
+
+interface Decision {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  reasoning: string;
+  made_by: string;
+  created_at: string;
+  previous_state?: any;
+  new_state?: any;
+}
+
+interface STTExtraction {
+  id: string;
+  session_id: string;
+  field: string;
+  value: string;
+  confidence: 'low' | 'medium' | 'high';
+  category: string;
+  quote?: string;
+  confirmed: boolean;
+  created_at: string;
+}
+
+// ============================================
+// UI COMPONENTS
+// ============================================
+
+const Card = ({ children, className = '', onClick }: { children: React.ReactNode; className?: string; onClick?: () => void }) => (
+  <div 
+    className={`bg-slate-800 rounded-lg border border-slate-700 ${onClick ? 'cursor-pointer hover:border-teal-500 transition-all' : ''} ${className}`}
+    onClick={onClick}
+  >
+    {children}
+  </div>
+);
+
+const Badge = ({ children, variant = 'default' }: { children: React.ReactNode; variant?: 'default' | 'success' | 'warning' | 'danger' | 'info' }) => {
+  const colors = {
+    default: 'bg-slate-600 text-slate-200',
+    success: 'bg-green-900/50 text-green-300 border border-green-700',
+    warning: 'bg-amber-900/50 text-amber-300 border border-amber-700',
+    danger: 'bg-red-900/50 text-red-300 border border-red-700',
+    info: 'bg-teal-900/50 text-teal-300 border border-teal-700'
+  };
+  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors[variant]}`}>{children}</span>;
+};
+
+const ProgressBar = ({ value, max }: { value: number; max: number }) => {
+  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  return (
+    <div className="w-full h-2 bg-slate-700 rounded-full overflow-hidden">
+      <div className="h-full bg-teal-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+    </div>
+  );
+};
+
+const Button = ({ children, onClick, variant = 'primary', size = 'md', disabled = false, className = '' }: { 
+  children: React.ReactNode; 
+  onClick?: () => void; 
+  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
+  size?: 'sm' | 'md' | 'lg';
+  disabled?: boolean;
+  className?: string;
+}) => {
+  const variants = {
+    primary: 'bg-teal-600 hover:bg-teal-500 text-white',
+    secondary: 'bg-slate-600 hover:bg-slate-500 text-white',
+    danger: 'bg-red-600 hover:bg-red-500 text-white',
+    ghost: 'bg-transparent hover:bg-slate-700 text-slate-300'
+  };
+  const sizes = {
+    sm: 'px-2 py-1 text-xs',
+    md: 'px-3 py-2 text-sm',
+    lg: 'px-4 py-2 text-base'
+  };
+  return (
+    <button 
+      onClick={onClick} 
+      disabled={disabled}
+      className={`${variants[variant]} ${sizes[size]} rounded font-medium transition-colors flex items-center gap-1 ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
+    >
+      {children}
+    </button>
+  );
+};
+
+const Input = ({ value, onChange, placeholder, type = 'text', className = '' }: {
+  value: string;
+  onChange: (val: string) => void;
+  placeholder?: string;
+  type?: string;
+  className?: string;
+}) => (
+  <input
+    type={type}
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+    placeholder={placeholder}
+    className={`w-full p-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 ${className}`}
+  />
+);
+
+const TextArea = ({ value, onChange, placeholder, rows = 3 }: {
+  value: string;
+  onChange: (val: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) => (
+  <textarea
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+    placeholder={placeholder}
+    rows={rows}
+    className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 resize-none"
+  />
+);
+
+const Select = ({ value, onChange, options, placeholder }: {
+  value: string;
+  onChange: (val: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+}) => (
+  <select
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+    className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white focus:outline-none focus:border-teal-500"
+  >
+    {placeholder && <option value="">{placeholder}</option>}
+    {options.map(opt => (
+      <option key={opt.value} value={opt.value}>{opt.label}</option>
+    ))}
+  </select>
+);
+
+const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: (val: boolean) => void; label?: string }) => (
+  <label className="flex items-center gap-2 cursor-pointer">
+    <div 
+      className={`w-10 h-6 rounded-full transition-colors ${checked ? 'bg-teal-600' : 'bg-slate-600'}`}
+      onClick={() => onChange(!checked)}
+    >
+      <div className={`w-4 h-4 bg-white rounded-full mt-1 transition-transform ${checked ? 'translate-x-5' : 'translate-x-1'}`} />
+    </div>
+    {label && <span className="text-sm text-slate-300">{label}</span>}
+  </label>
+);
+
+// ============================================
+// ICONS (inline SVG)
+// ============================================
+
+const Icons = {
+  Mic: () => <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>,
+  Stop: () => <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>,
+  Save: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>,
+  Edit: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>,
+  Plus: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>,
+  X: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>,
+  Check: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>,
+  ChevronRight: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>,
+  Lock: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>,
+  Eye: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>,
+  Download: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+  AlertTriangle: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
+};
+
+// ============================================
+// SEMANTIC ANALYZER
+// ============================================
+
+const analyzeTranscript = (text: string) => {
+  const extractions: Partial<STTExtraction>[] = [];
+  const uncertainties: { topic: string; reason: string; question: string }[] = [];
+  const suggestions: { type: string; content: string; priority: string }[] = [];
+
+  // TTD extraction
+  const ttdMatch = text.match(/(\d+)\s*(giorni|days)/i);
+  if (ttdMatch) {
+    const idx = text.indexOf(ttdMatch[0]);
+    extractions.push({
+      field: 'ttd_current',
+      value: ttdMatch[1],
+      confidence: 'high',
+      category: 'kpi',
+      quote: text.substring(Math.max(0, idx - 20), Math.min(text.length, idx + ttdMatch[0].length + 20))
+    });
+  }
+
+  // Projects extraction
+  const projMatch = text.match(/(\d+)\s*(progetti|projects)/i);
+  if (projMatch) {
+    extractions.push({
+      field: 'target_projects',
+      value: projMatch[1],
+      confidence: 'medium',
+      category: 'kpi'
+    });
+  }
+
+  // Conversion rate
+  const convMatch = text.match(/(\d+(?:[.,]\d+)?)\s*%/);
+  if (convMatch) {
+    extractions.push({
+      field: 'conversion_rate',
+      value: convMatch[1].replace(',', '.'),
+      confidence: 'high',
+      category: 'kpi'
+    });
+  }
+
+  // Budget
+  const budgetMatch = text.match(/(\d+)\s*(k|K|mila|euro|€)/);
+  if (budgetMatch) {
+    let val = parseInt(budgetMatch[1]);
+    if (budgetMatch[2].toLowerCase() === 'k' || budgetMatch[2] === 'mila') val *= 1000;
+    extractions.push({
+      field: 'budget',
+      value: val.toString(),
+      confidence: 'medium',
+      category: 'economic'
+    });
+  }
+
+  // Country detection
+  const countries = [
+    { patterns: ['brasile', 'brazil'], name: 'Brasile' },
+    { patterns: ['argentina'], name: 'Argentina' },
+    { patterns: ['messico', 'mexico'], name: 'Messico' },
+    { patterns: ['nigeria'], name: 'Nigeria' },
+    { patterns: ['africa'], name: 'Africa' },
+    { patterns: ['malta'], name: 'Malta' },
+    { patterns: ['sud africa', 'south africa'], name: 'Sud Africa' }
+  ];
+  
+  countries.forEach(c => {
+    if (c.patterns.some(p => text.toLowerCase().includes(p))) {
+      suggestions.push({
+        type: 'market',
+        content: `📍 Menzionato ${c.name} - verificare requisiti regolatori`,
+        priority: 'medium'
+      });
+    }
+  });
+
+  // Uncertainty markers
+  const vagueMarkers = ['circa', 'forse', 'più o meno', 'probabilmente', 'penso', 'credo', 'dovrebbe'];
+  vagueMarkers.forEach(marker => {
+    if (text.toLowerCase().includes(marker)) {
+      uncertainties.push({
+        topic: 'Dato approssimativo',
+        reason: `Usato "${marker}"`,
+        question: 'Puoi darmi un numero più preciso?'
+      });
+    }
+  });
+
+  // Decision detection
+  const decisionMarkers = ['deciso', 'abbiamo stabilito', 'procediamo con', 'andiamo con'];
+  decisionMarkers.forEach(marker => {
+    if (text.toLowerCase().includes(marker)) {
+      suggestions.push({
+        type: 'decision',
+        content: '✅ Possibile decisione rilevata - documentare',
+        priority: 'high'
+      });
+    }
+  });
+
+  return { extractions, uncertainties, suggestions };
+};
+
+// ============================================
+// MAIN APPLICATION
+// ============================================
+
+export default function DiscoveryCockpit() {
+  // ==========================================
+  // STATE
+  // ==========================================
+  
+  // Auth
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [pin, setPin] = useState('');
+  const [loginError, setLoginError] = useState('');
+
+  // Navigation
+  const [view, setView] = useState<ViewMode>('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Data from Supabase
+  const [users, setUsers] = useState<AppUser[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [taskDefinitions, setTaskDefinitions] = useState<TaskDefinition[]>([]);
+  const [userTasks, setUserTasks] = useState<UserTask[]>([]);
+  const [blockers, setBlockers] = useState<Blocker[]>([]);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [markets, setMarkets] = useState<MarketIntel[]>([]);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+
+  // UI State
+  const [loading, setLoading] = useState(true);
+  const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
+  const [answerDraft, setAnswerDraft] = useState('');
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+
+  // STT State
+  const [sttEnabled, setSttEnabled] = useState(false);
+  const [sttActive, setSttActive] = useState(false);
+  const [sttSupported, setSttSupported] = useState(false);
+  const [transcripts, setTranscripts] = useState<{ text: string; time: string; confidence: number }[]>([]);
+  const [sttExtractions, setSttExtractions] = useState<Partial<STTExtraction>[]>([]);
+  const [sttUncertainties, setSttUncertainties] = useState<{ topic: string; reason: string; question: string }[]>([]);
+  const [sttSuggestions, setSttSuggestions] = useState<{ type: string; content: string; priority: string }[]>([]);
+
+  // Refs
+  const recognitionRef = useRef<any>(null);
+  const bufferRef = useRef<string>('');
+  const analysisTimerRef = useRef<any>(null);
+
+  // ==========================================
+  // PERMISSIONS
+  // ==========================================
+  
+  const canViewAll = currentUser?.role === 'consultant' || currentUser?.role === 'owner';
+  const canViewOwnerData = currentUser?.role === 'owner' || currentUser?.role === 'consultant';
+  const canEditProject = currentUser?.role === 'owner';
+  const canEditOwnProfile = currentUser?.role === 'team_member';
+  const isGodMode = currentUser?.role === 'consultant';
+
+  // ==========================================
+  // DATA LOADING
+  // ==========================================
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Load users
+      const { data: usersData } = await supabase.from('users').select('*').order('name');
+      if (usersData) setUsers(usersData);
+
+      // Load project
+      const { data: projectData } = await supabase.from('projects').select('*').single();
+      if (projectData) setProject(projectData);
+
+      // Load questions
+      const { data: questionsData } = await supabase.from('discovery_questions').select('*').order('priority');
+      if (questionsData) setQuestions(questionsData);
+
+      // Load task definitions
+      const { data: tasksData } = await supabase.from('task_definitions').select('*').order('category, name');
+      if (tasksData) setTaskDefinitions(tasksData);
+
+      // Load user tasks
+      const { data: userTasksData } = await supabase.from('user_tasks').select('*');
+      if (userTasksData) setUserTasks(userTasksData);
+
+      // Load blockers
+      const { data: blockersData } = await supabase.from('user_blockers').select('*').order('created_at', { ascending: false });
+      if (blockersData) setBlockers(blockersData);
+
+      // Load suggestions
+      const { data: suggestionsData } = await supabase.from('improvement_suggestions').select('*').order('created_at', { ascending: false });
+      if (suggestionsData) setSuggestions(suggestionsData);
+
+      // Load markets
+      const { data: marketsData } = await supabase.from('market_intelligence').select('*').order('region, name');
+      if (marketsData) setMarkets(marketsData);
+
+      // Load decisions
+      const { data: decisionsData } = await supabase.from('decisions').select('*').order('created_at', { ascending: false });
+      if (decisionsData) setDecisions(decisionsData);
+
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // ==========================================
+  // STT INITIALIZATION
+  // ==========================================
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        setSttSupported(true);
+        recognitionRef.current = new SpeechRecognition();
+        recognitionRef.current.continuous = true;
+        recognitionRef.current.interimResults = true;
+        recognitionRef.current.lang = 'it-IT';
+
+        recognitionRef.current.onresult = (event: any) => {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+              const text = event.results[i][0].transcript;
+              const confidence = event.results[i][0].confidence;
+
+              setTranscripts(prev => [...prev.slice(-15), {
+                text,
+                time: new Date().toLocaleTimeString('it-IT'),
+                confidence: Math.round(confidence * 100)
+              }]);
+
+              bufferRef.current += ' ' + text;
+
+              // Debounced analysis
+              if (analysisTimerRef.current) clearTimeout(analysisTimerRef.current);
+              analysisTimerRef.current = setTimeout(() => {
+                const analysis = analyzeTranscript(bufferRef.current);
+                bufferRef.current = '';
+
+                if (analysis.extractions.length) {
+                  setSttExtractions(prev => [...analysis.extractions, ...prev].slice(0, 20));
+                  
+                  // Auto-update project KPIs
+                  analysis.extractions.forEach(e => {
+                    if (e.field === 'ttd_current' && e.value) {
+                      updateProject({ ttd_current: parseInt(e.value) });
+                    }
+                    if (e.field === 'target_projects' && e.value) {
+                      updateProject({ target_projects_month: parseInt(e.value) });
+                    }
+                  });
+                }
+
+                if (analysis.uncertainties.length) {
+                  setSttUncertainties(prev => [...analysis.uncertainties, ...prev].slice(0, 10));
+                }
+
+                if (analysis.suggestions.length) {
+                  setSttSuggestions(prev => [...analysis.suggestions, ...prev].slice(0, 10));
+                }
+              }, 5000);
+            }
+          }
+        };
+
+        recognitionRef.current.onerror = (event: any) => {
+          console.warn('STT error:', event.error);
+          if (event.error === 'no-speech' && sttActive) {
+            setTimeout(() => recognitionRef.current?.start(), 100);
+          }
+        };
+
+        recognitionRef.current.onend = () => {
+          if (sttActive) {
+            setTimeout(() => {
+              try { recognitionRef.current?.start(); } catch (e) {}
+            }, 100);
+          }
+        };
+      }
+    }
+
+    return () => {
+      recognitionRef.current?.stop();
+    };
+  }, [sttActive]);
+
+  // ==========================================
+  // ACTIONS
+  // ==========================================
+
+  const handleLogin = async () => {
+    const user = users.find(u => u.id === selectedUserId);
+    if (!user) {
+      setLoginError('Seleziona un utente');
+      return;
+    }
+    if (pin !== user.pin) {
+      setLoginError('PIN errato');
+      return;
+    }
+    setCurrentUser(user);
+    setIsLoggedIn(true);
+    setPin('');
+    setLoginError('');
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setCurrentUser(null);
+    setSelectedUserId(null);
+    setView('dashboard');
+  };
+
+  const updateProject = async (updates: Partial<Project>) => {
+    if (!project) return;
+    
+    const previousState = { ...project };
+    const newState = { ...project, ...updates };
+    
+    const { error } = await supabase
+      .from('projects')
+      .update(updates)
+      .eq('id', project.id);
+
+    if (!error) {
+      setProject(newState);
+      
+      // Log decision
+      await supabase.from('decisions').insert({
+        type: 'project_update',
+        title: `Aggiornamento progetto`,
+        description: `Modificati: ${Object.keys(updates).join(', ')}`,
+        reasoning: 'Aggiornamento automatico da discovery',
+        made_by: currentUser?.name || 'Sistema',
+        previous_state: previousState,
+        new_state: newState
+      });
+    }
+  };
+
+  const updateUser = async (userId: string, updates: Partial<AppUser>) => {
+    const { error } = await supabase
+      .from('users')
+      .update(updates)
+      .eq('id', userId);
+
+    if (!error) {
+      setUsers(users.map(u => u.id === userId ? { ...u, ...updates } : u));
+    }
+  };
+
+  const answerQuestion = async (questionId: string) => {
+    if (!answerDraft.trim()) return;
+
+    const { error } = await supabase
+      .from('discovery_questions')
+      .update({
+        answered: true,
+        answer: answerDraft,
+        answered_by: currentUser?.name,
+        answered_at: new Date().toISOString()
+      })
+      .eq('id', questionId);
+
+    if (!error) {
+      setQuestions(questions.map(q => 
+        q.id === questionId 
+          ? { ...q, answered: true, answer: answerDraft, answered_by: currentUser?.name }
+          : q
+      ));
+      setAnswerDraft('');
+      setActiveQuestionId(null);
+    }
+  };
+
+  const addUserTask = async (userId: string, taskId: string, taskName: string, isCustom: boolean = false) => {
+    const existing = userTasks.filter(t => t.user_id === userId);
+    if (existing.length >= 10) {
+      alert('Massimo 10 task per utente');
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('user_tasks')
+      .insert({ user_id: userId, task_id: taskId, task_name: taskName, is_custom: isCustom })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setUserTasks([...userTasks, data]);
+    }
+  };
+
+  const removeUserTask = async (taskId: string) => {
+    const { error } = await supabase.from('user_tasks').delete().eq('id', taskId);
+    if (!error) {
+      setUserTasks(userTasks.filter(t => t.id !== taskId));
+    }
+  };
+
+  const addBlocker = async (userId: string, blocker: Omit<Blocker, 'id' | 'user_id' | 'created_at'>) => {
+    const { data, error } = await supabase
+      .from('user_blockers')
+      .insert({ ...blocker, user_id: userId })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setBlockers([data, ...blockers]);
+    }
+  };
+
+  const updateBlockerStatus = async (blockerId: string, status: Blocker['status']) => {
+    const { error } = await supabase
+      .from('user_blockers')
+      .update({ status })
+      .eq('id', blockerId);
+
+    if (!error) {
+      setBlockers(blockers.map(b => b.id === blockerId ? { ...b, status } : b));
+    }
+  };
+
+  const toggleSTT = () => {
+    if (sttActive) {
+      recognitionRef.current?.stop();
+      setSttActive(false);
+    } else {
+      setTranscripts([]);
+      setSttExtractions([]);
+      setSttUncertainties([]);
+      setSttSuggestions([]);
+      try {
+        recognitionRef.current?.start();
+        setSttActive(true);
+      } catch (e) {
+        console.error('Failed to start STT:', e);
+      }
+    }
+  };
+
+  // ==========================================
+  // COMPUTED VALUES
+  // ==========================================
+
+  const answeredQuestions = questions.filter(q => q.answered);
+  const unansweredQuestions = questions.filter(q => !q.answered);
+  const criticalGaps = unansweredQuestions.filter(q => q.priority === 'critical');
+  const highGaps = unansweredQuestions.filter(q => q.priority === 'high');
+
+  const teamMembers = users.filter(u => u.role === 'team_member');
+  const organizationalBlockers = blockers.filter(b => b.requires_owner && b.status !== 'resolved');
+
+  // ==========================================
+  // LOGIN SCREEN
+  // ==========================================
+
+  if (!isLoggedIn) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+        <Card className="p-6 w-full max-w-md">
+          <div className="text-center mb-6">
+            <h1 className="text-2xl font-bold text-white">🎯 BetStarters Discovery</h1>
+            <p className="text-slate-400 text-sm mt-1">Seleziona utente e inserisci PIN</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mb-6">
+            {users.map(u => (
+              <button
+                key={u.id}
+                onClick={() => { setSelectedUserId(u.id); setLoginError(''); }}
+                className={`p-3 rounded-lg border transition-all text-left ${
+                  selectedUserId === u.id
+                    ? 'border-teal-500 bg-teal-900/30'
+                    : 'border-slate-600 bg-slate-700/50 hover:border-slate-500'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ${
+                    u.role === 'owner' ? 'bg-amber-600' :
+                    u.role === 'consultant' ? 'bg-teal-600' : 'bg-slate-600'
+                  }`}>
+                    {u.name.charAt(0)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white font-medium text-sm truncate">{u.name}</p>
+                    <p className="text-xs text-slate-400">
+                      {u.role === 'owner' ? '👑 Owner' : 
+                       u.role === 'consultant' ? '🔮 Consultant' : 
+                       `📍 ${u.market_focus || 'Team'}`}
+                    </p>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {selectedUserId && (
+            <div className="space-y-3">
+              <input
+                type="password"
+                maxLength={4}
+                placeholder="PIN"
+                value={pin}
+                onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                className="w-full p-3 bg-slate-700 border border-slate-600 rounded-lg text-white text-center text-2xl tracking-widest focus:outline-none focus:border-teal-500"
+              />
+              {loginError && <p className="text-red-400 text-sm text-center">{loginError}</p>}
+              <Button onClick={handleLogin} className="w-full justify-center">
+                Accedi
+              </Button>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // MAIN INTERFACE
+  // ==========================================
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-white">Caricamento...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-900 flex">
+      {/* ========== SIDEBAR ========== */}
+      <div className={`${sidebarCollapsed ? 'w-16' : 'w-56'} bg-slate-800 border-r border-slate-700 flex flex-col transition-all`}>
+        <div className="p-4 border-b border-slate-700 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🎯</span>
+            {!sidebarCollapsed && <span className="font-bold text-white">Discovery</span>}
+          </div>
+          <button 
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="text-slate-400 hover:text-white"
+          >
+            {sidebarCollapsed ? '→' : '←'}
+          </button>
+        </div>
+
+        <nav className="flex-1 p-2 space-y-1">
+          {[
+            { id: 'dashboard', icon: '📊', label: 'Dashboard', show: true },
+            { id: 'call', icon: '📞', label: 'Call Mode', show: canViewAll },
+            { id: 'team', icon: '👥', label: 'Team', show: true },
+            { id: 'markets', icon: '🌍', label: 'Markets', show: canViewAll },
+            { id: 'reports', icon: '📄', label: 'Reports', show: canViewAll },
+            { id: 'owner_private', icon: '🔒', label: 'Area Riservata', show: canViewOwnerData },
+            { id: 'settings', icon: '⚙️', label: 'Settings', show: true },
+          ].filter(item => item.show).map(item => (
+            <button
+              key={item.id}
+              onClick={() => setView(item.id as ViewMode)}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                view === item.id 
+                  ? 'bg-teal-600 text-white' 
+                  : 'text-slate-400 hover:bg-slate-700 hover:text-white'
+              }`}
+            >
+              <span>{item.icon}</span>
+              {!sidebarCollapsed && <span className="text-sm">{item.label}</span>}
+            </button>
+          ))}
+        </nav>
+
+        {/* User info */}
+        <div className="p-4 border-t border-slate-700">
+          <div className="flex items-center gap-2">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+              currentUser?.role === 'owner' ? 'bg-amber-600' :
+              currentUser?.role === 'consultant' ? 'bg-teal-600' : 'bg-slate-600'
+            }`}>
+              {currentUser?.name.charAt(0)}
+            </div>
+            {!sidebarCollapsed && (
+              <div className="flex-1">
+                <p className="text-white text-sm font-medium">{currentUser?.name}</p>
+                <p className="text-xs text-slate-400">
+                  {currentUser?.role === 'consultant' ? '🔮 God Mode' : currentUser?.role}
+                </p>
+              </div>
+            )}
+          </div>
+          {!sidebarCollapsed && (
+            <button 
+              onClick={handleLogout}
+              className="mt-2 text-xs text-slate-500 hover:text-white w-full text-left"
+            >
+              Logout
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ========== MAIN CONTENT ========== */}
+      <div className="flex-1 p-6 overflow-auto">
+        
+        {/* ========== DASHBOARD ========== */}
+        {view === 'dashboard' && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-white">📊 Dashboard</h2>
+
+            {/* KPI Cards */}
+            <div className="grid grid-cols-4 gap-4">
+              <Card className="p-4">
+                <p className="text-xs text-slate-400 uppercase">Progetti/mese</p>
+                <p className="text-3xl font-bold text-white mt-1">{project?.current_projects_month || 0}</p>
+                <p className="text-sm text-slate-400">target: {project?.target_projects_month || 0}</p>
+                <div className="mt-2">
+                  <ProgressBar value={project?.current_projects_month || 0} max={project?.target_projects_month || 1} />
+                </div>
+              </Card>
+
+              <Card className="p-4">
+                <p className="text-xs text-slate-400 uppercase">TTD (giorni)</p>
+                <p className="text-3xl font-bold text-white mt-1">{project?.ttd_current || '—'}</p>
+                <p className="text-sm text-slate-400">target: {project?.ttd_target || 30}</p>
+              </Card>
+
+              <Card className="p-4">
+                <p className="text-xs text-slate-400 uppercase">Discovery</p>
+                <p className="text-3xl font-bold text-white mt-1">
+                  {questions.length > 0 ? Math.round((answeredQuestions.length / questions.length) * 100) : 0}%
+                </p>
+                <p className="text-sm text-slate-400">{answeredQuestions.length}/{questions.length}</p>
+                <div className="mt-2">
+                  <ProgressBar value={answeredQuestions.length} max={questions.length} />
+                </div>
+              </Card>
+
+              <Card className={`p-4 ${criticalGaps.length > 0 ? 'border-red-700' : ''}`}>
+                <p className="text-xs text-slate-400 uppercase">Gap Critici</p>
+                <p className={`text-3xl font-bold mt-1 ${criticalGaps.length > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                  {criticalGaps.length}
+                </p>
+                <p className="text-sm text-slate-400">da risolvere</p>
+              </Card>
+            </div>
+
+            {/* Two columns */}
+            <div className="grid grid-cols-2 gap-6">
+              {/* Team Overview */}
+              <Card className="p-4">
+                <h3 className="font-semibold text-white mb-4">👥 Team</h3>
+                <div className="space-y-2">
+                  {teamMembers.map(member => {
+                    const memberTasks = userTasks.filter(t => t.user_id === member.id);
+                    const memberBlockers = blockers.filter(b => b.user_id === member.id && b.status !== 'resolved');
+                    
+                    return (
+                      <div key={member.id} className="flex items-center justify-between p-2 bg-slate-700/50 rounded">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-sm">
+                            {member.name.charAt(0)}
+                          </div>
+                          <div>
+                            <p className="text-sm text-white">{member.name}</p>
+                            <p className="text-xs text-slate-400">
+                              {member.market_focus || '—'} 
+                              {member.work_type && ` • ${member.work_type}`}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">{memberTasks.length} task</span>
+                          {memberBlockers.length > 0 && (
+                            <Badge variant="danger">{memberBlockers.length} blocchi</Badge>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+
+              {/* Critical Gaps */}
+              <Card className="p-4">
+                <h3 className="font-semibold text-white mb-4">⚠️ Gap Critici</h3>
+                {criticalGaps.length === 0 ? (
+                  <p className="text-green-400 text-sm">✓ Nessun gap critico</p>
+                ) : (
+                  <div className="space-y-2">
+                    {criticalGaps.slice(0, 5).map(q => (
+                      <div key={q.id} className="p-2 bg-red-900/20 border-l-2 border-red-500 rounded-r">
+                        <p className="text-sm text-red-200">{q.text}</p>
+                      </div>
+                    ))}
+                    {criticalGaps.length > 5 && (
+                      <p className="text-xs text-slate-400">+{criticalGaps.length - 5} altri</p>
+                    )}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            {/* Organizational Blockers (visible to owner/consultant) */}
+            {canViewOwnerData && organizationalBlockers.length > 0 && (
+              <Card className="p-4 border-amber-700">
+                <h3 className="font-semibold text-amber-400 mb-4">🚨 Blocchi Organizzativi (richiedono azione owner)</h3>
+                <div className="space-y-2">
+                  {organizationalBlockers.map(b => {
+                    const reporter = users.find(u => u.id === b.user_id);
+                    return (
+                      <div key={b.id} className="p-3 bg-amber-900/20 rounded flex items-start justify-between">
+                        <div>
+                          <p className="text-white font-medium">{b.title}</p>
+                          <p className="text-sm text-slate-400">{b.description}</p>
+                          <p className="text-xs text-slate-500 mt-1">Segnalato da: {reporter?.name}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={b.impact === 'critical' ? 'danger' : b.impact === 'high' ? 'warning' : 'default'}>
+                            {b.impact}
+                          </Badge>
+                          {canEditProject && (
+                            <Select
+                              value={b.status}
+                              onChange={(val) => updateBlockerStatus(b.id, val as Blocker['status'])}
+                              options={[
+                                { value: 'reported', label: 'Segnalato' },
+                                { value: 'acknowledged', label: 'Preso in carico' },
+                                { value: 'in_progress', label: 'In lavorazione' },
+                                { value: 'resolved', label: 'Risolto' }
+                              ]}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+
+        {/* ========== CALL MODE ========== */}
+        {view === 'call' && canViewAll && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">📞 Call Mode</h2>
+                <p className="text-slate-400">{unansweredQuestions.length} domande rimanenti</p>
+              </div>
+              <div className="flex items-center gap-4">
+                <Toggle checked={sttEnabled} onChange={setSttEnabled} label="Abilita STT" />
+                <Badge variant="success">● Live</Badge>
+              </div>
+            </div>
+
+            {/* STT Panel */}
+            {sttEnabled && (
+              <Card className={`p-4 ${sttActive ? 'border-red-500 bg-red-900/10' : 'border-teal-700'}`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <button
+                      onClick={toggleSTT}
+                      disabled={!sttSupported}
+                      className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
+                        sttActive 
+                          ? 'bg-red-600 hover:bg-red-500 animate-pulse' 
+                          : 'bg-teal-600 hover:bg-teal-500'
+                      } ${!sttSupported ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {sttActive ? <Icons.Stop /> : <Icons.Mic />}
+                    </button>
+                    <div>
+                      <p className="text-white font-medium">
+                        {!sttSupported ? '⚠️ STT non supportato' :
+                         sttActive ? '🔴 In ascolto...' : 'STT Pronto'}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {sttSupported ? 'Web Speech API' : 'Usa Chrome o Edge'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right text-sm text-slate-400">
+                    <p>Trascrizioni: {transcripts.length}</p>
+                    <p>Dati estratti: {sttExtractions.length}</p>
+                  </div>
+                </div>
+
+                {/* Live transcript */}
+                {sttActive && transcripts.length > 0 && (
+                  <div className="mt-3 p-2 bg-slate-900/50 rounded max-h-24 overflow-y-auto">
+                    {transcripts.slice(-3).map((t, i) => (
+                      <p key={i} className="text-sm text-slate-300">
+                        <span className="text-slate-500 text-xs">{t.time}</span> {t.text}
+                        <span className="text-slate-500 text-xs ml-2">({t.confidence}%)</span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+
+                {/* Extractions */}
+                {sttExtractions.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {sttExtractions.slice(0, 6).map((e, i) => (
+                      <Badge key={i} variant={e.confidence === 'high' ? 'success' : 'warning'}>
+                        {e.field}: {e.value}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {/* Question stats */}
+            <div className="grid grid-cols-4 gap-3">
+              <div className="bg-red-900/30 border border-red-800 rounded p-3 text-center">
+                <p className="text-2xl font-bold text-red-400">{criticalGaps.length}</p>
+                <p className="text-xs text-red-300">Critiche</p>
+              </div>
+              <div className="bg-amber-900/30 border border-amber-800 rounded p-3 text-center">
+                <p className="text-2xl font-bold text-amber-400">{highGaps.length}</p>
+                <p className="text-xs text-amber-300">Alte</p>
+              </div>
+              <div className="bg-blue-900/30 border border-blue-800 rounded p-3 text-center">
+                <p className="text-2xl font-bold text-blue-400">
+                  {unansweredQuestions.filter(q => q.priority === 'medium').length}
+                </p>
+                <p className="text-xs text-blue-300">Medie</p>
+              </div>
+              <div className="bg-green-900/30 border border-green-800 rounded p-3 text-center">
+                <p className="text-2xl font-bold text-green-400">{answeredQuestions.length}</p>
+                <p className="text-xs text-green-300">Completate</p>
+              </div>
+            </div>
+
+            {/* Questions */}
+            <Card className="p-4">
+              <h3 className="font-semibold text-white mb-4">⚡ Domande Prioritarie</h3>
+              <div className="space-y-2">
+                {unansweredQuestions.slice(0, 10).map(q => (
+                  <div key={q.id}>
+                    <div
+                      onClick={() => setActiveQuestionId(activeQuestionId === q.id ? null : q.id)}
+                      className={`p-3 rounded border-l-4 cursor-pointer hover:bg-slate-700/30 transition-colors ${
+                        q.priority === 'critical' ? 'border-red-500 bg-red-900/20' :
+                        q.priority === 'high' ? 'border-amber-500 bg-amber-900/20' :
+                        q.priority === 'medium' ? 'border-blue-500 bg-blue-900/20' :
+                        'border-slate-500 bg-slate-900/20'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Badge variant={
+                          q.priority === 'critical' ? 'danger' :
+                          q.priority === 'high' ? 'warning' : 'info'
+                        }>
+                          {q.priority}
+                        </Badge>
+                        <span className="text-xs text-slate-500">{q.category}</span>
+                        <Icons.ChevronRight />
+                      </div>
+                      <p className="text-sm text-slate-200 mt-2">{q.text}</p>
+                    </div>
+
+                    {activeQuestionId === q.id && (
+                      <div className="mt-2 p-3 bg-slate-900/50 rounded border border-slate-700">
+                        <TextArea
+                          value={answerDraft}
+                          onChange={setAnswerDraft}
+                          placeholder="Inserisci la risposta..."
+                          rows={3}
+                        />
+                        <div className="flex gap-2 mt-2">
+                          <Button size="sm" onClick={() => answerQuestion(q.id)}>
+                            <Icons.Save /> Salva
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => setActiveQuestionId(null)}>
+                            Annulla
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* AI Suggestions from STT */}
+            {(sttSuggestions.length > 0 || sttUncertainties.length > 0) && (
+              <div className="grid grid-cols-2 gap-4">
+                {sttSuggestions.length > 0 && (
+                  <Card className="p-4 border-teal-700">
+                    <h4 className="font-semibold text-teal-400 mb-2">💡 Suggerimenti AI</h4>
+                    <div className="space-y-1">
+                      {sttSuggestions.slice(0, 5).map((s, i) => (
+                        <p key={i} className="text-sm text-slate-300">{s.content}</p>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+                {sttUncertainties.length > 0 && (
+                  <Card className="p-4 border-amber-700">
+                    <h4 className="font-semibold text-amber-400 mb-2">⚠️ Da Chiarire</h4>
+                    <div className="space-y-1">
+                      {sttUncertainties.slice(0, 5).map((u, i) => (
+                        <p key={i} className="text-sm text-slate-300">
+                          {u.topic}: {u.reason} → <span className="text-amber-300">{u.question}</span>
+                        </p>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========== TEAM VIEW ========== */}
+        {view === 'team' && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-white">👥 Team</h2>
+
+            <div className="grid grid-cols-2 gap-4">
+              {(canViewAll ? users.filter(u => u.role !== 'consultant') : [currentUser]).filter(Boolean).map(member => {
+                if (!member) return null;
+                
+                const memberTasks = userTasks.filter(t => t.user_id === member.id);
+                const memberBlockers = blockers.filter(b => b.user_id === member.id);
+                const memberSuggestions = suggestions.filter(s => s.user_id === member.id);
+                const isEditing = editingUserId === member.id;
+                const canEdit = isGodMode || (canEditOwnProfile && currentUser?.id === member.id);
+
+                return (
+                  <Card key={member.id} className="p-4">
+                    {/* Header */}
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center text-lg font-bold ${
+                          member.role === 'owner' ? 'bg-amber-600' : 'bg-slate-600'
+                        }`}>
+                          {member.name.charAt(0)}
+                        </div>
+                        <div>
+                          <p className="text-white font-semibold">{member.name}</p>
+                          <p className="text-sm text-slate-400">
+                            {member.role === 'owner' ? '👑 Owner' : `📍 ${member.market_focus || '—'}`}
+                          </p>
+                        </div>
+                      </div>
+                      {canEdit && (
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          onClick={() => setEditingUserId(isEditing ? null : member.id)}
+                        >
+                          <Icons.Edit /> {isEditing ? 'Chiudi' : 'Modifica'}
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Work Type */}
+                    <div className="mb-4">
+                      <p className="text-xs text-slate-400 uppercase mb-1">Tipo contratto</p>
+                      {isEditing ? (
+                        <Select
+                          value={member.work_type || ''}
+                          onChange={(val) => updateUser(member.id, { work_type: val as WorkType })}
+                          options={[
+                            { value: 'fulltime', label: 'Full-time' },
+                            { value: 'parttime', label: 'Part-time' }
+                          ]}
+                          placeholder="Seleziona..."
+                        />
+                      ) : (
+                        <Badge variant={member.work_type === 'fulltime' ? 'success' : member.work_type === 'parttime' ? 'info' : 'default'}>
+                          {member.work_type || 'Non definito'}
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* Tasks */}
+                    <div className="mb-4">
+                      <p className="text-xs text-slate-400 uppercase mb-2">Task ({memberTasks.length}/10)</p>
+                      <div className="flex flex-wrap gap-1 mb-2">
+                        {memberTasks.map(task => (
+                          <span key={task.id} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700 rounded text-xs text-slate-300">
+                            {task.task_name}
+                            {isEditing && (
+                              <button onClick={() => removeUserTask(task.id)} className="text-red-400 hover:text-red-300">
+                                <Icons.X />
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                      {isEditing && memberTasks.length < 10 && (
+                        <Select
+                          value=""
+                          onChange={(val) => {
+                            const task = taskDefinitions.find(t => t.id === val);
+                            if (task) addUserTask(member.id, task.id, task.name);
+                          }}
+                          options={taskDefinitions
+                            .filter(t => !memberTasks.some(mt => mt.task_id === t.id))
+                            .map(t => ({ value: t.id, label: t.name }))}
+                          placeholder="+ Aggiungi task..."
+                        />
+                      )}
+                    </div>
+
+                    {/* Blockers */}
+                    {(canViewAll || currentUser?.id === member.id) && memberBlockers.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-xs text-slate-400 uppercase mb-2">Blocchi segnalati</p>
+                        <div className="space-y-1">
+                          {memberBlockers.slice(0, 3).map(b => (
+                            <div key={b.id} className="p-2 bg-red-900/20 rounded text-xs">
+                              <div className="flex items-center justify-between">
+                                <span className="text-red-200">{b.title}</span>
+                                <Badge variant={b.status === 'resolved' ? 'success' : 'danger'}>{b.status}</Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ========== MARKETS VIEW ========== */}
+        {view === 'markets' && canViewAll && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-white">🌍 Market Intelligence</h2>
+
+            <div className="grid grid-cols-3 gap-4">
+              {markets.map(m => (
+                <Card key={m.code} className="p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-lg font-bold text-white">{m.code}</span>
+                    <Badge variant={
+                      m.confidence === 'verified' ? 'success' :
+                      m.confidence === 'high' ? 'info' : 'warning'
+                    }>
+                      {m.confidence}
+                    </Badge>
+                  </div>
+                  <p className="text-white">{m.name}</p>
+                  <p className="text-sm text-slate-400">{m.region}</p>
+                  <div className="mt-3 pt-3 border-t border-slate-700 space-y-1">
+                    <p className="text-xs"><span className="text-slate-400">Status:</span> <span className="text-teal-400">{m.status}</span></p>
+                    <p className="text-xs"><span className="text-slate-400">Regulator:</span> {m.regulator}</p>
+                    <p className="text-xs text-slate-500 mt-2">{m.summary}</p>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ========== OWNER PRIVATE AREA ========== */}
+        {view === 'owner_private' && canViewOwnerData && (
+          <div className="space-y-6">
+            <div className="flex items-center gap-2">
+              <Icons.Lock />
+              <h2 className="text-2xl font-bold text-white">Area Riservata</h2>
+              {isGodMode && <Badge variant="info">God Mode</Badge>}
+            </div>
+
+            <Card className="p-6">
+              <h3 className="font-semibold text-white mb-4">💰 Dati Confidenziali</h3>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Budget Totale (€)</label>
+                  <Input
+                    type="number"
+                    value={project?.budget_total?.toString() || ''}
+                    onChange={(val) => canEditProject && updateProject({ budget_total: parseInt(val) || 0 })}
+                    placeholder="Es: 100000"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400 uppercase">Margine Target (%)</label>
+                  <Input
+                    type="number"
+                    value={project?.margin_target?.toString() || ''}
+                    onChange={(val) => canEditProject && updateProject({ margin_target: parseInt(val) || 0 })}
+                    placeholder="Es: 30"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="text-xs text-slate-400 uppercase">Note Strategiche</label>
+                <TextArea
+                  value={project?.strategic_notes || ''}
+                  onChange={(val) => canEditProject && updateProject({ strategic_notes: val })}
+                  placeholder="Note riservate visibili solo a owner e consultant..."
+                  rows={4}
+                />
+              </div>
+
+              {!canEditProject && (
+                <p className="text-xs text-slate-500 mt-4">
+                  <Icons.Eye /> Visualizzazione in sola lettura (God Mode)
+                </p>
+              )}
+            </Card>
+
+            {/* Decision Log */}
+            <Card className="p-4">
+              <h3 className="font-semibold text-white mb-4">📋 Log Decisioni</h3>
+              {decisions.length === 0 ? (
+                <p className="text-slate-500 text-sm">Nessuna decisione registrata</p>
+              ) : (
+                <div className="space-y-2">
+                  {decisions.slice(0, 10).map(d => (
+                    <div key={d.id} className="p-3 bg-slate-700/50 rounded">
+                      <div className="flex items-center justify-between">
+                        <p className="text-white font-medium">{d.title}</p>
+                        <span className="text-xs text-slate-400">
+                          {new Date(d.created_at).toLocaleDateString('it-IT')}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-400 mt-1">{d.description}</p>
+                      {d.reasoning && (
+                        <p className="text-xs text-slate-500 mt-1">Reasoning: {d.reasoning}</p>
+                      )}
+                      <p className="text-xs text-teal-400 mt-1">by {d.made_by}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* ========== REPORTS VIEW ========== */}
+        {view === 'reports' && canViewAll && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-white">📄 Reports</h2>
+
+            <Card className="p-6">
+              <h3 className="font-semibold text-white mb-4">Discovery Progress Report</h3>
+              
+              <div className="grid grid-cols-4 gap-4 mb-6">
+                <div className="text-center p-4 bg-slate-700/50 rounded">
+                  <p className="text-3xl font-bold text-white">{answeredQuestions.length}</p>
+                  <p className="text-xs text-slate-400">Domande risposte</p>
+                </div>
+                <div className="text-center p-4 bg-slate-700/50 rounded">
+                  <p className="text-3xl font-bold text-red-400">{criticalGaps.length}</p>
+                  <p className="text-xs text-slate-400">Gap critici</p>
+                </div>
+                <div className="text-center p-4 bg-slate-700/50 rounded">
+                  <p className="text-3xl font-bold text-teal-400">{sttExtractions.length}</p>
+                  <p className="text-xs text-slate-400">Dati estratti (STT)</p>
+                </div>
+                <div className="text-center p-4 bg-slate-700/50 rounded">
+                  <p className="text-3xl font-bold text-amber-400">{blockers.filter(b => b.status !== 'resolved').length}</p>
+                  <p className="text-xs text-slate-400">Blocchi aperti</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <Button onClick={() => {
+                  const report = {
+                    generated_at: new Date().toISOString(),
+                    project,
+                    questions_answered: answeredQuestions.length,
+                    questions_total: questions.length,
+                    critical_gaps: criticalGaps.map(q => q.text),
+                    team_summary: teamMembers.map(m => ({
+                      name: m.name,
+                      market: m.market_focus,
+                      work_type: m.work_type,
+                      tasks: userTasks.filter(t => t.user_id === m.id).map(t => t.task_name),
+                      open_blockers: blockers.filter(b => b.user_id === m.id && b.status !== 'resolved').length
+                    })),
+                    stt_extractions: sttExtractions,
+                    decisions: decisions.slice(0, 20)
+                  };
+                  const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `discovery-report-${new Date().toISOString().split('T')[0]}.json`;
+                  a.click();
+                }}>
+                  <Icons.Download /> Esporta JSON
+                </Button>
+                <Button variant="secondary" onClick={() => alert('PDF export coming soon')}>
+                  <Icons.Download /> Esporta PDF
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* ========== SETTINGS VIEW ========== */}
+        {view === 'settings' && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-white">⚙️ Settings</h2>
+
+            <Card className="p-4">
+              <h3 className="font-semibold text-white mb-4">Utente corrente</h3>
+              <div className="space-y-2">
+                <p className="text-slate-300">Nome: {currentUser?.name}</p>
+                <p className="text-slate-300">Ruolo: {currentUser?.role}</p>
+                {currentUser?.market_focus && <p className="text-slate-300">Market: {currentUser.market_focus}</p>}
+                <p className="text-slate-300">
+                  Permessi: {isGodMode ? '🔮 God Mode (accesso completo)' : 
+                    canViewOwnerData ? '👑 Owner (accesso dati riservati)' : 
+                    '👤 Team Member (accesso limitato)'}
+                </p>
+              </div>
+            </Card>
+
+            <Card className="p-4">
+              <h3 className="font-semibold text-white mb-4">Speech-to-Text</h3>
+              <p className="text-sm text-slate-400">
+                Status: {sttSupported ? '✅ Supportato (Web Speech API)' : '❌ Non supportato - usa Chrome o Edge'}
+              </p>
+            </Card>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
