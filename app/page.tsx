@@ -471,6 +471,20 @@ export default function DiscoveryCockpit() {
   const recognitionRef = useRef<any>(null);
   const bufferRef = useRef<string>('');
   const analysisTimerRef = useRef<any>(null);
+  
+  // Refs for stale closure fix - these keep current values accessible in callbacks
+  const questionsRef = useRef<Question[]>([]);
+  const usersRef = useRef<AppUser[]>([]);
+  const currentUserRef = useRef<AppUser | null>(null);
+  const sttSessionIdRef = useRef<string | null>(null);
+  const projectRef = useRef<Project | null>(null);
+
+  // Keep refs in sync with state
+  useEffect(() => { questionsRef.current = questions; }, [questions]);
+  useEffect(() => { usersRef.current = users; }, [users]);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+  useEffect(() => { sttSessionIdRef.current = sttSessionId; }, [sttSessionId]);
+  useEffect(() => { projectRef.current = project; }, [project]);
 
   // ==========================================
   // PERMISSIONS
@@ -558,11 +572,11 @@ export default function DiscoveryCockpit() {
 
               bufferRef.current += ' ' + text;
 
-              // Debounced analysis
+              // Debounced analysis - process after 2 seconds of silence
               if (analysisTimerRef.current) clearTimeout(analysisTimerRef.current);
               analysisTimerRef.current = setTimeout(() => {
                 processSTTBuffer();
-              }, 5000);
+              }, 2000);
             }
           }
         };
@@ -616,7 +630,7 @@ export default function DiscoveryCockpit() {
     let bestMatch: Question | null = null;
     let bestScore = 0;
     
-    const unanswered = questions.filter(q => !q.answered);
+    const unanswered = questionsRef.current.filter(q => !q.answered);
     
     for (const q of unanswered) {
       const questionWords = q.text.toLowerCase().split(/\s+/).filter(w => w.length > 3);
@@ -677,7 +691,7 @@ export default function DiscoveryCockpit() {
       // Only allow corrections within 2 minutes of last answer
       if (timeSinceLastAnswer < 120000) {
         const questionId = lastAnsweredRef.current.questionId;
-        const question = questions.find(q => q.id === questionId);
+        const question = questionsRef.current.find(q => q.id === questionId);
         
         if (question) {
           console.log('Correction detected for:', question.text);
@@ -690,15 +704,15 @@ export default function DiscoveryCockpit() {
           }
           
           // Detect new mentions
-          const mentionedUserIds = detectMentions(correctedText, users);
-          const mentionedNames = mentionedUserIds.map(id => users.find(u => u.id === id)?.name).filter(Boolean);
+          const mentionedUserIds = detectMentions(correctedText, usersRef.current);
+          const mentionedNames = mentionedUserIds.map(id => usersRef.current.find(u => u.id === id)?.name).filter(Boolean);
           
           // Update the answer
           const { error } = await supabase
             .from('discovery_questions')
             .update({
               answer: correctedText,
-              answered_by: currentUser?.name + ' (STT - corretto)',
+              answered_by: currentUserRef.current?.name + ' (STT - corretto)',
               answered_at: new Date().toISOString(),
               mentioned_users: mentionedUserIds
             })
@@ -707,7 +721,7 @@ export default function DiscoveryCockpit() {
           if (!error) {
             setQuestions(prev => prev.map(q => 
               q.id === questionId 
-                ? { ...q, answer: correctedText, answered_by: currentUser?.name + ' (STT - corretto)', mentioned_users: mentionedUserIds }
+                ? { ...q, answer: correctedText, answered_by: currentUserRef.current?.name + ' (STT - corretto)', mentioned_users: mentionedUserIds }
                 : q
             ));
             
@@ -730,8 +744,8 @@ export default function DiscoveryCockpit() {
       console.log('Matched question:', matchedQuestion.text);
       
       // Detect team mentions
-      const mentionedUserIds = detectMentions(text, users);
-      const mentionedNames = mentionedUserIds.map(id => users.find(u => u.id === id)?.name).filter(Boolean);
+      const mentionedUserIds = detectMentions(text, usersRef.current);
+      const mentionedNames = mentionedUserIds.map(id => usersRef.current.find(u => u.id === id)?.name).filter(Boolean);
       
       // Auto-save as answer
       const { error } = await supabase
@@ -739,7 +753,7 @@ export default function DiscoveryCockpit() {
         .update({
           answered: true,
           answer: text,
-          answered_by: currentUser?.name + ' (STT)',
+          answered_by: currentUserRef.current?.name + ' (STT)',
           answered_at: new Date().toISOString(),
           mentioned_users: mentionedUserIds
         })
@@ -749,7 +763,7 @@ export default function DiscoveryCockpit() {
         // Update local state
         setQuestions(prev => prev.map(q => 
           q.id === matchedQuestion.id 
-            ? { ...q, answered: true, answer: text, answered_by: currentUser?.name + ' (STT)', mentioned_users: mentionedUserIds }
+            ? { ...q, answered: true, answer: text, answered_by: currentUserRef.current?.name + ' (STT)', mentioned_users: mentionedUserIds }
             : q
         ));
         
@@ -774,9 +788,9 @@ export default function DiscoveryCockpit() {
       // Save extractions to database and update project
       for (const e of analysis.extractions) {
         // Save to stt_extractions table
-        if (sttSessionId) {
+        if (sttSessionIdRef.current) {
           await supabase.from('stt_extractions').insert({
-            session_id: sttSessionId,
+            session_id: sttSessionIdRef.current,
             field: e.field,
             value: e.value,
             confidence: e.confidence,
