@@ -1,10 +1,9 @@
 "use client";
 
-"use client";
-
 // ============================================
 // BETSTARTERS DISCOVERY COCKPIT
 // Production-ready for selfhosting
+// v1.1 - Fixed: STT saves to DB, clickable answers, team mentions
 // ============================================
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -23,7 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 // ============================================
 
 type UserRole = 'owner' | 'team_member' | 'consultant';
-type WorkType = 'fulltime' | 'parttime' | null; // null = non ancora definito
+type WorkType = 'fulltime' | 'parttime' | null;
 type ViewMode = 'dashboard' | 'call' | 'team' | 'markets' | 'reports' | 'settings' | 'owner_private';
 
 interface AppUser {
@@ -45,7 +44,6 @@ interface Project {
   target_timeline_months: number;
   ttd_current?: number;
   ttd_target?: number;
-  // Owner private data
   budget_total?: number;
   margin_target?: number;
   strategic_notes?: string;
@@ -60,6 +58,7 @@ interface Question {
   answer?: string;
   answered_by?: string;
   answered_at?: string;
+  mentioned_users?: string[]; // NEW: users mentioned in answer
 }
 
 interface TaskDefinition {
@@ -261,8 +260,24 @@ const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: (val
   </label>
 );
 
+// Modal component
+const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-lg mx-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+          <h3 className="font-semibold text-white">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+        </div>
+        <div className="p-4">{children}</div>
+      </div>
+    </div>
+  );
+};
+
 // ============================================
-// ICONS (inline SVG)
+// ICONS
 // ============================================
 
 const Icons = {
@@ -274,9 +289,11 @@ const Icons = {
   X: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>,
   Check: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>,
   ChevronRight: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>,
+  ChevronDown: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>,
   Lock: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>,
   Eye: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>,
   Download: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>,
+  Trash: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
   AlertTriangle: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>,
 };
 
@@ -385,6 +402,21 @@ const analyzeTranscript = (text: string) => {
   return { extractions, uncertainties, suggestions };
 };
 
+// Detect team member mentions in text
+const detectMentions = (text: string, users: AppUser[]): string[] => {
+  const mentioned: string[] = [];
+  const lowerText = text.toLowerCase();
+  
+  users.forEach(user => {
+    const firstName = user.name.split(' ')[0].toLowerCase();
+    if (lowerText.includes(firstName)) {
+      mentioned.push(user.id);
+    }
+  });
+  
+  return mentioned;
+};
+
 // ============================================
 // MAIN APPLICATION
 // ============================================
@@ -421,6 +453,9 @@ export default function DiscoveryCockpit() {
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [answerDraft, setAnswerDraft] = useState('');
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [viewingQuestionId, setViewingQuestionId] = useState<string | null>(null); // NEW: for viewing answered questions
+  const [editingAnswerId, setEditingAnswerId] = useState<string | null>(null); // NEW: for editing answers
+  const [showAnsweredQuestions, setShowAnsweredQuestions] = useState(false); // NEW: toggle answered questions
 
   // STT State
   const [sttEnabled, setSttEnabled] = useState(false);
@@ -430,6 +465,7 @@ export default function DiscoveryCockpit() {
   const [sttExtractions, setSttExtractions] = useState<Partial<STTExtraction>[]>([]);
   const [sttUncertainties, setSttUncertainties] = useState<{ topic: string; reason: string; question: string }[]>([]);
   const [sttSuggestions, setSttSuggestions] = useState<{ type: string; content: string; priority: string }[]>([]);
+  const [sttSessionId, setSttSessionId] = useState<string | null>(null); // NEW: track session
 
   // Refs
   const recognitionRef = useRef<any>(null);
@@ -453,39 +489,30 @@ export default function DiscoveryCockpit() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // Load users
       const { data: usersData } = await supabase.from('users').select('*').order('name');
       if (usersData) setUsers(usersData);
 
-      // Load project
       const { data: projectData } = await supabase.from('projects').select('*').single();
       if (projectData) setProject(projectData);
 
-      // Load questions
-      const { data: questionsData } = await supabase.from('discovery_questions').select('*').order('priority');
+      const { data: questionsData } = await supabase.from('discovery_questions').select('*').order('sort_order');
       if (questionsData) setQuestions(questionsData);
 
-      // Load task definitions
       const { data: tasksData } = await supabase.from('task_definitions').select('*').order('category, name');
       if (tasksData) setTaskDefinitions(tasksData);
 
-      // Load user tasks
       const { data: userTasksData } = await supabase.from('user_tasks').select('*');
       if (userTasksData) setUserTasks(userTasksData);
 
-      // Load blockers
       const { data: blockersData } = await supabase.from('user_blockers').select('*').order('created_at', { ascending: false });
       if (blockersData) setBlockers(blockersData);
 
-      // Load suggestions
       const { data: suggestionsData } = await supabase.from('improvement_suggestions').select('*').order('created_at', { ascending: false });
       if (suggestionsData) setSuggestions(suggestionsData);
 
-      // Load markets
       const { data: marketsData } = await supabase.from('market_intelligence').select('*').order('region, name');
       if (marketsData) setMarkets(marketsData);
 
-      // Load decisions
       const { data: decisionsData } = await supabase.from('decisions').select('*').order('created_at', { ascending: false });
       if (decisionsData) setDecisions(decisionsData);
 
@@ -530,30 +557,7 @@ export default function DiscoveryCockpit() {
               // Debounced analysis
               if (analysisTimerRef.current) clearTimeout(analysisTimerRef.current);
               analysisTimerRef.current = setTimeout(() => {
-                const analysis = analyzeTranscript(bufferRef.current);
-                bufferRef.current = '';
-
-                if (analysis.extractions.length) {
-                  setSttExtractions(prev => [...analysis.extractions, ...prev].slice(0, 20));
-                  
-                  // Auto-update project KPIs
-                  analysis.extractions.forEach(e => {
-                    if (e.field === 'ttd_current' && e.value) {
-                      updateProject({ ttd_current: parseInt(e.value) });
-                    }
-                    if (e.field === 'target_projects' && e.value) {
-                      updateProject({ target_projects_month: parseInt(e.value) });
-                    }
-                  });
-                }
-
-                if (analysis.uncertainties.length) {
-                  setSttUncertainties(prev => [...analysis.uncertainties, ...prev].slice(0, 10));
-                }
-
-                if (analysis.suggestions.length) {
-                  setSttSuggestions(prev => [...analysis.suggestions, ...prev].slice(0, 10));
-                }
+                processSTTBuffer();
               }, 5000);
             }
           }
@@ -580,6 +584,55 @@ export default function DiscoveryCockpit() {
       recognitionRef.current?.stop();
     };
   }, [sttActive]);
+
+  // Process STT buffer and save to database
+  const processSTTBuffer = async () => {
+    const text = bufferRef.current.trim();
+    if (!text) return;
+    
+    bufferRef.current = '';
+    
+    const analysis = analyzeTranscript(text);
+
+    if (analysis.extractions.length) {
+      setSttExtractions(prev => [...analysis.extractions, ...prev].slice(0, 20));
+      
+      // Save extractions to database and update project
+      for (const e of analysis.extractions) {
+        // Save to stt_extractions table
+        if (sttSessionId) {
+          await supabase.from('stt_extractions').insert({
+            session_id: sttSessionId,
+            field: e.field,
+            value: e.value,
+            confidence: e.confidence,
+            category: e.category,
+            quote: e.quote,
+            confirmed: false
+          });
+        }
+
+        // Update project KPIs
+        if (e.field === 'ttd_current' && e.value) {
+          await updateProject({ ttd_current: parseInt(e.value) });
+        }
+        if (e.field === 'target_projects' && e.value) {
+          await updateProject({ target_projects_month: parseInt(e.value) });
+        }
+        if (e.field === 'budget' && e.value && canEditProject) {
+          await updateProject({ budget_total: parseInt(e.value) });
+        }
+      }
+    }
+
+    if (analysis.uncertainties.length) {
+      setSttUncertainties(prev => [...analysis.uncertainties, ...prev].slice(0, 10));
+    }
+
+    if (analysis.suggestions.length) {
+      setSttSuggestions(prev => [...analysis.suggestions, ...prev].slice(0, 10));
+    }
+  };
 
   // ==========================================
   // ACTIONS
@@ -627,11 +680,15 @@ export default function DiscoveryCockpit() {
         type: 'project_update',
         title: `Aggiornamento progetto`,
         description: `Modificati: ${Object.keys(updates).join(', ')}`,
-        reasoning: 'Aggiornamento automatico da discovery',
+        reasoning: 'Aggiornamento da discovery',
         made_by: currentUser?.name || 'Sistema',
         previous_state: previousState,
         new_state: newState
       });
+      
+      // Reload decisions
+      const { data } = await supabase.from('decisions').select('*').order('created_at', { ascending: false });
+      if (data) setDecisions(data);
     }
   };
 
@@ -649,24 +706,80 @@ export default function DiscoveryCockpit() {
   const answerQuestion = async (questionId: string) => {
     if (!answerDraft.trim()) return;
 
+    // Detect team mentions in the answer
+    const mentionedUsers = detectMentions(answerDraft, users);
+
     const { error } = await supabase
       .from('discovery_questions')
       .update({
         answered: true,
         answer: answerDraft,
         answered_by: currentUser?.name,
-        answered_at: new Date().toISOString()
+        answered_at: new Date().toISOString(),
+        mentioned_users: mentionedUsers
       })
       .eq('id', questionId);
 
     if (!error) {
       setQuestions(questions.map(q => 
         q.id === questionId 
-          ? { ...q, answered: true, answer: answerDraft, answered_by: currentUser?.name }
+          ? { ...q, answered: true, answer: answerDraft, answered_by: currentUser?.name, mentioned_users: mentionedUsers }
           : q
       ));
       setAnswerDraft('');
       setActiveQuestionId(null);
+    }
+  };
+
+  // NEW: Update existing answer
+  const updateAnswer = async (questionId: string, newAnswer: string) => {
+    if (!newAnswer.trim()) return;
+
+    const mentionedUsers = detectMentions(newAnswer, users);
+
+    const { error } = await supabase
+      .from('discovery_questions')
+      .update({
+        answer: newAnswer,
+        answered_by: currentUser?.name,
+        answered_at: new Date().toISOString(),
+        mentioned_users: mentionedUsers
+      })
+      .eq('id', questionId);
+
+    if (!error) {
+      setQuestions(questions.map(q => 
+        q.id === questionId 
+          ? { ...q, answer: newAnswer, answered_by: currentUser?.name, mentioned_users: mentionedUsers }
+          : q
+      ));
+      setEditingAnswerId(null);
+      setAnswerDraft('');
+    }
+  };
+
+  // NEW: Delete answer (reset question to unanswered)
+  const deleteAnswer = async (questionId: string) => {
+    if (!confirm('Sei sicuro di voler eliminare questa risposta?')) return;
+
+    const { error } = await supabase
+      .from('discovery_questions')
+      .update({
+        answered: false,
+        answer: null,
+        answered_by: null,
+        answered_at: null,
+        mentioned_users: null
+      })
+      .eq('id', questionId);
+
+    if (!error) {
+      setQuestions(questions.map(q => 
+        q.id === questionId 
+          ? { ...q, answered: false, answer: undefined, answered_by: undefined, answered_at: undefined, mentioned_users: undefined }
+          : q
+      ));
+      setViewingQuestionId(null);
     }
   };
 
@@ -718,21 +831,58 @@ export default function DiscoveryCockpit() {
     }
   };
 
+  const startSTTSession = async () => {
+    // Create session in database
+    const { data, error } = await supabase
+      .from('stt_sessions')
+      .insert({
+        project_id: project?.id,
+        started_by: currentUser?.id
+      })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setSttSessionId(data.id);
+    }
+
+    setTranscripts([]);
+    setSttExtractions([]);
+    setSttUncertainties([]);
+    setSttSuggestions([]);
+    
+    try {
+      recognitionRef.current?.start();
+      setSttActive(true);
+    } catch (e) {
+      console.error('Failed to start STT:', e);
+    }
+  };
+
+  const stopSTTSession = async () => {
+    recognitionRef.current?.stop();
+    setSttActive(false);
+
+    // Update session in database
+    if (sttSessionId) {
+      await supabase
+        .from('stt_sessions')
+        .update({
+          ended_at: new Date().toISOString(),
+          transcript_count: transcripts.length,
+          extraction_count: sttExtractions.length
+        })
+        .eq('id', sttSessionId);
+    }
+
+    setSttSessionId(null);
+  };
+
   const toggleSTT = () => {
     if (sttActive) {
-      recognitionRef.current?.stop();
-      setSttActive(false);
+      stopSTTSession();
     } else {
-      setTranscripts([]);
-      setSttExtractions([]);
-      setSttUncertainties([]);
-      setSttSuggestions([]);
-      try {
-        recognitionRef.current?.start();
-        setSttActive(true);
-      } catch (e) {
-        console.error('Failed to start STT:', e);
-      }
+      startSTTSession();
     }
   };
 
@@ -747,6 +897,11 @@ export default function DiscoveryCockpit() {
 
   const teamMembers = users.filter(u => u.role === 'team_member');
   const organizationalBlockers = blockers.filter(b => b.requires_owner && b.status !== 'resolved');
+
+  // Get questions that mention a specific user
+  const getQuestionsAboutUser = (userId: string) => {
+    return questions.filter(q => q.mentioned_users?.includes(userId));
+  };
 
   // ==========================================
   // LOGIN SCREEN
@@ -951,6 +1106,7 @@ export default function DiscoveryCockpit() {
                   {teamMembers.map(member => {
                     const memberTasks = userTasks.filter(t => t.user_id === member.id);
                     const memberBlockers = blockers.filter(b => b.user_id === member.id && b.status !== 'resolved');
+                    const memberMentions = getQuestionsAboutUser(member.id);
                     
                     return (
                       <div key={member.id} className="flex items-center justify-between p-2 bg-slate-700/50 rounded">
@@ -968,6 +1124,9 @@ export default function DiscoveryCockpit() {
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-slate-400">{memberTasks.length} task</span>
+                          {memberMentions.length > 0 && (
+                            <Badge variant="info">{memberMentions.length} menzioni</Badge>
+                          )}
                           {memberBlockers.length > 0 && (
                             <Badge variant="danger">{memberBlockers.length} blocchi</Badge>
                           )}
@@ -998,10 +1157,10 @@ export default function DiscoveryCockpit() {
               </Card>
             </div>
 
-            {/* Organizational Blockers (visible to owner/consultant) */}
+            {/* Organizational Blockers */}
             {canViewOwnerData && organizationalBlockers.length > 0 && (
               <Card className="p-4 border-amber-700">
-                <h3 className="font-semibold text-amber-400 mb-4">🚨 Blocchi Organizzativi (richiedono azione owner)</h3>
+                <h3 className="font-semibold text-amber-400 mb-4">🚨 Blocchi Organizzativi</h3>
                 <div className="space-y-2">
                   {organizationalBlockers.map(b => {
                     const reporter = users.find(u => u.id === b.user_id);
@@ -1070,11 +1229,11 @@ export default function DiscoveryCockpit() {
                     </button>
                     <div>
                       <p className="text-white font-medium">
-                        {!sttSupported ? '⚠️ STT non supportato' :
-                         sttActive ? '🔴 In ascolto...' : 'STT Pronto'}
+                        {!sttSupported ? '⚠️ STT non supportato (usa Chrome)' :
+                         sttActive ? '🔴 In ascolto... (salva automaticamente su DB)' : 'STT Pronto'}
                       </p>
                       <p className="text-xs text-slate-400">
-                        {sttSupported ? 'Web Speech API' : 'Usa Chrome o Edge'}
+                        {sttSupported ? 'Web Speech API • Dati salvati su Supabase' : 'Usa Chrome o Edge'}
                       </p>
                     </div>
                   </div>
@@ -1101,7 +1260,7 @@ export default function DiscoveryCockpit() {
                   <div className="mt-3 flex flex-wrap gap-2">
                     {sttExtractions.slice(0, 6).map((e, i) => (
                       <Badge key={i} variant={e.confidence === 'high' ? 'success' : 'warning'}>
-                        {e.field}: {e.value}
+                        {e.field}: {e.value} ✓
                       </Badge>
                     ))}
                   </div>
@@ -1109,7 +1268,7 @@ export default function DiscoveryCockpit() {
               </Card>
             )}
 
-            {/* Question stats */}
+            {/* Question stats - CLICKABLE */}
             <div className="grid grid-cols-4 gap-3">
               <div className="bg-red-900/30 border border-red-800 rounded p-3 text-center">
                 <p className="text-2xl font-bold text-red-400">{criticalGaps.length}</p>
@@ -1125,13 +1284,87 @@ export default function DiscoveryCockpit() {
                 </p>
                 <p className="text-xs text-blue-300">Medie</p>
               </div>
-              <div className="bg-green-900/30 border border-green-800 rounded p-3 text-center">
+              <div 
+                className="bg-green-900/30 border border-green-800 rounded p-3 text-center cursor-pointer hover:bg-green-900/50 transition-colors"
+                onClick={() => setShowAnsweredQuestions(!showAnsweredQuestions)}
+              >
                 <p className="text-2xl font-bold text-green-400">{answeredQuestions.length}</p>
-                <p className="text-xs text-green-300">Completate</p>
+                <p className="text-xs text-green-300">Completate {showAnsweredQuestions ? '▼' : '▶'}</p>
               </div>
             </div>
 
-            {/* Questions */}
+            {/* ANSWERED QUESTIONS - NEW */}
+            {showAnsweredQuestions && answeredQuestions.length > 0 && (
+              <Card className="p-4 border-green-700">
+                <h3 className="font-semibold text-green-400 mb-4">✅ Domande Completate (click per vedere/modificare)</h3>
+                <div className="space-y-2">
+                  {answeredQuestions.map(q => (
+                    <div key={q.id}>
+                      <div
+                        onClick={() => setViewingQuestionId(viewingQuestionId === q.id ? null : q.id)}
+                        className="p-3 rounded border-l-4 border-green-500 bg-green-900/20 cursor-pointer hover:bg-green-900/30 transition-colors"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Badge variant="success">completata</Badge>
+                            <span className="text-xs text-slate-500">{q.category}</span>
+                          </div>
+                          {viewingQuestionId === q.id ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
+                        </div>
+                        <p className="text-sm text-slate-200 mt-2">{q.text}</p>
+                      </div>
+
+                      {/* View/Edit Answer */}
+                      {viewingQuestionId === q.id && (
+                        <div className="mt-2 p-3 bg-slate-900/50 rounded border border-slate-700">
+                          <p className="text-xs text-slate-400 mb-2">
+                            Risposto da {q.answered_by} • {q.answered_at ? new Date(q.answered_at).toLocaleString('it-IT') : ''}
+                          </p>
+                          
+                          {editingAnswerId === q.id ? (
+                            <>
+                              <TextArea
+                                value={answerDraft}
+                                onChange={setAnswerDraft}
+                                placeholder="Modifica risposta..."
+                                rows={3}
+                              />
+                              <div className="flex gap-2 mt-2">
+                                <Button size="sm" onClick={() => updateAnswer(q.id, answerDraft)}>
+                                  <Icons.Save /> Salva
+                                </Button>
+                                <Button size="sm" variant="ghost" onClick={() => { setEditingAnswerId(null); setAnswerDraft(''); }}>
+                                  Annulla
+                                </Button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-slate-300 bg-slate-800 p-2 rounded">{q.answer}</p>
+                              {q.mentioned_users && q.mentioned_users.length > 0 && (
+                                <p className="text-xs text-teal-400 mt-2">
+                                  👥 Menzionati: {q.mentioned_users.map(uid => users.find(u => u.id === uid)?.name).filter(Boolean).join(', ')}
+                                </p>
+                              )}
+                              <div className="flex gap-2 mt-3">
+                                <Button size="sm" variant="secondary" onClick={() => { setEditingAnswerId(q.id); setAnswerDraft(q.answer || ''); }}>
+                                  <Icons.Edit /> Modifica
+                                </Button>
+                                <Button size="sm" variant="danger" onClick={() => deleteAnswer(q.id)}>
+                                  <Icons.Trash /> Elimina
+                                </Button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Unanswered Questions */}
             <Card className="p-4">
               <h3 className="font-semibold text-white mb-4">⚡ Domande Prioritarie</h3>
               <div className="space-y-2">
@@ -1167,6 +1400,7 @@ export default function DiscoveryCockpit() {
                           placeholder="Inserisci la risposta..."
                           rows={3}
                         />
+                        <p className="text-xs text-slate-500 mt-1">💡 Se menzioni un nome del team (es. "Anita"), verrà collegato al suo profilo</p>
                         <div className="flex gap-2 mt-2">
                           <Button size="sm" onClick={() => answerQuestion(q.id)}>
                             <Icons.Save /> Salva
@@ -1223,9 +1457,9 @@ export default function DiscoveryCockpit() {
                 
                 const memberTasks = userTasks.filter(t => t.user_id === member.id);
                 const memberBlockers = blockers.filter(b => b.user_id === member.id);
-                const memberSuggestions = suggestions.filter(s => s.user_id === member.id);
+                const memberMentions = getQuestionsAboutUser(member.id);
                 const isEditing = editingUserId === member.id;
-                const canEdit = isGodMode || (canEditOwnProfile && currentUser?.id === member.id);
+                const canEdit = isGodMode || (canEditOwnProfile && currentUser?.id === member.id) || currentUser?.role === 'owner';
 
                 return (
                   <Card key={member.id} className="p-4">
@@ -1274,6 +1508,24 @@ export default function DiscoveryCockpit() {
                         </Badge>
                       )}
                     </div>
+
+                    {/* Mentions - NEW */}
+                    {memberMentions.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-xs text-slate-400 uppercase mb-2">📝 Menzionato in ({memberMentions.length} risposte)</p>
+                        <div className="space-y-1">
+                          {memberMentions.slice(0, 3).map(q => (
+                            <div key={q.id} className="p-2 bg-teal-900/20 rounded text-xs">
+                              <p className="text-teal-300 font-medium">{q.text}</p>
+                              <p className="text-slate-400 mt-1">"{q.answer?.substring(0, 100)}..."</p>
+                            </div>
+                          ))}
+                          {memberMentions.length > 3 && (
+                            <p className="text-xs text-slate-500">+{memberMentions.length - 3} altre menzioni</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Tasks */}
                     <div className="mb-4">
@@ -1471,11 +1723,18 @@ export default function DiscoveryCockpit() {
                     questions_answered: answeredQuestions.length,
                     questions_total: questions.length,
                     critical_gaps: criticalGaps.map(q => q.text),
+                    answered_questions: answeredQuestions.map(q => ({
+                      question: q.text,
+                      answer: q.answer,
+                      answered_by: q.answered_by,
+                      mentioned_users: q.mentioned_users?.map(uid => users.find(u => u.id === uid)?.name)
+                    })),
                     team_summary: teamMembers.map(m => ({
                       name: m.name,
                       market: m.market_focus,
                       work_type: m.work_type,
                       tasks: userTasks.filter(t => t.user_id === m.id).map(t => t.task_name),
+                      mentions: getQuestionsAboutUser(m.id).length,
                       open_blockers: blockers.filter(b => b.user_id === m.id && b.status !== 'resolved').length
                     })),
                     stt_extractions: sttExtractions,
@@ -1521,6 +1780,9 @@ export default function DiscoveryCockpit() {
               <h3 className="font-semibold text-white mb-4">Speech-to-Text</h3>
               <p className="text-sm text-slate-400">
                 Status: {sttSupported ? '✅ Supportato (Web Speech API)' : '❌ Non supportato - usa Chrome o Edge'}
+              </p>
+              <p className="text-sm text-slate-400 mt-2">
+                I dati estratti vengono salvati automaticamente su Supabase.
               </p>
             </Card>
           </div>
