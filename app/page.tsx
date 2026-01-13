@@ -3,7 +3,7 @@
 // ============================================
 // BETSTARTERS DISCOVERY COCKPIT
 // Production-ready for selfhosting
-// v1.1 - Fixed: STT saves to DB, clickable answers, team mentions
+// v1.3 - Team notes & ideas with publish to dashboard
 // ============================================
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -16,6 +16,9 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Claude API for smart extraction (optional - falls back to pattern matching)
+const CLAUDE_API_KEY = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || '';
 
 // ============================================
 // TYPES
@@ -58,7 +61,17 @@ interface Question {
   answer?: string;
   answered_by?: string;
   answered_at?: string;
-  mentioned_users?: string[]; // NEW: users mentioned in answer
+  mentioned_users?: string[];
+}
+
+interface AnswerHistory {
+  id: string;
+  question_id: string;
+  answer: string;
+  answered_by: string;
+  mentioned_users?: string[];
+  source: 'manual' | 'stt' | 'stt_correction';
+  created_at: string;
 }
 
 interface TaskDefinition {
@@ -98,6 +111,16 @@ interface Suggestion {
   expected_benefit?: string;
   status: 'submitted' | 'under_review' | 'approved' | 'completed' | 'declined';
   created_at: string;
+}
+
+interface TeamNote {
+  id: string;
+  user_id: string;
+  content: string;
+  status: 'draft' | 'published';
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface MarketIntel {
@@ -199,34 +222,38 @@ const Button = ({ children, onClick, variant = 'primary', size = 'md', disabled 
   );
 };
 
-const Input = ({ value, onChange, placeholder, type = 'text', className = '' }: {
+const Input = ({ value, onChange, placeholder, type = 'text', className = '', disabled = false }: {
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
   type?: string;
   className?: string;
+  disabled?: boolean;
 }) => (
   <input
     type={type}
     value={value}
-    onChange={(e) => onChange(e.target.value)}
+    onChange={(e) => !disabled && onChange(e.target.value)}
     placeholder={placeholder}
-    className={`w-full p-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 ${className}`}
+    disabled={disabled}
+    className={`w-full p-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 ${disabled ? 'opacity-60 cursor-not-allowed' : ''} ${className}`}
   />
 );
 
-const TextArea = ({ value, onChange, placeholder, rows = 3 }: {
+const TextArea = ({ value, onChange, placeholder, rows = 3, disabled = false }: {
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
   rows?: number;
+  disabled?: boolean;
 }) => (
   <textarea
     value={value}
-    onChange={(e) => onChange(e.target.value)}
+    onChange={(e) => !disabled && onChange(e.target.value)}
     placeholder={placeholder}
     rows={rows}
-    className="w-full p-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 resize-none"
+    disabled={disabled}
+    className={`w-full p-2 bg-slate-700 border border-slate-600 rounded text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 resize-none ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
   />
 );
 
@@ -447,15 +474,20 @@ export default function DiscoveryCockpit() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [markets, setMarkets] = useState<MarketIntel[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [answerHistory, setAnswerHistory] = useState<AnswerHistory[]>([]);
+  const [teamNotes, setTeamNotes] = useState<TeamNote[]>([]);
 
   // UI State
   const [loading, setLoading] = useState(true);
   const [activeQuestionId, setActiveQuestionId] = useState<string | null>(null);
   const [answerDraft, setAnswerDraft] = useState('');
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
-  const [viewingQuestionId, setViewingQuestionId] = useState<string | null>(null); // NEW: for viewing answered questions
-  const [editingAnswerId, setEditingAnswerId] = useState<string | null>(null); // NEW: for editing answers
-  const [showAnsweredQuestions, setShowAnsweredQuestions] = useState(false); // NEW: toggle answered questions
+  const [viewingQuestionId, setViewingQuestionId] = useState<string | null>(null);
+  const [editingAnswerId, setEditingAnswerId] = useState<string | null>(null);
+  const [showAnsweredQuestions, setShowAnsweredQuestions] = useState(false);
+  const [noteDraft, setNoteDraft] = useState<Record<string, string>>({}); // Draft per user
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [customTaskDraft, setCustomTaskDraft] = useState<Record<string, string>>({}); // Custom task input
 
   // STT State
   const [sttEnabled, setSttEnabled] = useState(false);
@@ -529,6 +561,14 @@ export default function DiscoveryCockpit() {
 
       const { data: decisionsData } = await supabase.from('decisions').select('*').order('created_at', { ascending: false });
       if (decisionsData) setDecisions(decisionsData);
+
+      // Load answer history
+      const { data: historyData } = await supabase.from('answer_history').select('*').order('created_at', { ascending: false });
+      if (historyData) setAnswerHistory(historyData);
+
+      // Load team notes
+      const { data: notesData } = await supabase.from('team_notes').select('*').order('created_at', { ascending: false });
+      if (notesData) setTeamNotes(notesData);
 
     } catch (error) {
       console.error('Error loading data:', error);
@@ -674,6 +714,124 @@ export default function DiscoveryCockpit() {
     return bestMatch;
   };
 
+  // Save answer history (tracks all changes)
+  const saveAnswerHistory = async (questionId: string, answer: string, answeredBy: string, mentionedUsers: string[], source: 'manual' | 'stt' | 'stt_correction') => {
+    const { data, error } = await supabase
+      .from('answer_history')
+      .insert({
+        question_id: questionId,
+        answer,
+        answered_by: answeredBy,
+        mentioned_users: mentionedUsers,
+        source
+      })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setAnswerHistory(prev => [data, ...prev]);
+    }
+    return data;
+  };
+
+  // Smart AI extraction using Claude API (falls back to pattern matching)
+  const extractWithAI = async (text: string, questions: Question[], users: AppUser[]): Promise<{
+    matchedQuestionId: string | null;
+    extractedAnswer: string;
+    mentionedUserIds: string[];
+    confidence: number;
+  }> => {
+    // If no API key, fall back to pattern matching
+    if (!CLAUDE_API_KEY) {
+      const matched = findMatchingQuestion(text);
+      const mentions = detectMentions(text, users);
+      return {
+        matchedQuestionId: matched?.id || null,
+        extractedAnswer: text,
+        mentionedUserIds: mentions,
+        confidence: matched ? 0.5 : 0
+      };
+    }
+
+    try {
+      const unanswered = questions.filter(q => !q.answered);
+      const teamNames = users.filter(u => u.role === 'team_member').map(u => u.name);
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-3-haiku-20240307',
+          max_tokens: 500,
+          messages: [{
+            role: 'user',
+            content: `Analizza questo testo trascritto da una call di discovery e:
+1. Identifica quale domanda sta rispondendo (se presente)
+2. Estrai i nomi del team menzionati
+3. Valuta la confidenza (0-1)
+
+TESTO TRASCRITTO:
+"${text}"
+
+DOMANDE NON ANCORA RISPOSTE:
+${unanswered.map((q, i) => `${i + 1}. [ID:${q.id}] ${q.text}`).join('\n')}
+
+NOMI DEL TEAM DA RILEVARE:
+${teamNames.join(', ')}
+
+Rispondi SOLO in JSON:
+{
+  "matched_question_id": "ID della domanda o null",
+  "extracted_answer": "la parte rilevante del testo come risposta",
+  "mentioned_names": ["nome1", "nome2"],
+  "confidence": 0.8,
+  "reasoning": "breve spiegazione"
+}`
+          }]
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.content[0]?.text || '';
+        
+        // Parse JSON from response
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          
+          // Map names to IDs
+          const mentionedIds = (parsed.mentioned_names || [])
+            .map((name: string) => users.find(u => u.name.toLowerCase().includes(name.toLowerCase()))?.id)
+            .filter(Boolean);
+
+          return {
+            matchedQuestionId: parsed.matched_question_id !== 'null' ? parsed.matched_question_id : null,
+            extractedAnswer: parsed.extracted_answer || text,
+            mentionedUserIds: mentionedIds,
+            confidence: parsed.confidence || 0
+          };
+        }
+      }
+    } catch (e) {
+      console.error('AI extraction failed:', e);
+    }
+
+    // Fallback to pattern matching
+    const matched = findMatchingQuestion(text);
+    const mentions = detectMentions(text, users);
+    return {
+      matchedQuestionId: matched?.id || null,
+      extractedAnswer: text,
+      mentionedUserIds: mentions,
+      confidence: matched ? 0.5 : 0
+    };
+  };
+
   // Process STT buffer and save to database
   const processSTTBuffer = async () => {
     const text = bufferRef.current.trim();
@@ -707,6 +865,9 @@ export default function DiscoveryCockpit() {
           const mentionedUserIds = detectMentions(correctedText, usersRef.current);
           const mentionedNames = mentionedUserIds.map(id => usersRef.current.find(u => u.id === id)?.name).filter(Boolean);
           
+          // Save to history BEFORE updating
+          await saveAnswerHistory(questionId, correctedText, currentUserRef.current?.name + ' (STT)', mentionedUserIds, 'stt_correction');
+          
           // Update the answer
           const { error } = await supabase
             .from('discovery_questions')
@@ -738,21 +899,38 @@ export default function DiscoveryCockpit() {
       }
     }
 
-    // === AUTO-ANSWER QUESTIONS ===
-    const matchedQuestion = findMatchingQuestion(text);
-    if (matchedQuestion) {
-      console.log('Matched question:', matchedQuestion.text);
+    // === AUTO-ANSWER QUESTIONS (with AI extraction) ===
+    // Try AI extraction first, fall back to pattern matching
+    const aiResult = await extractWithAI(text, questionsRef.current, usersRef.current);
+    
+    const matchedQuestion = aiResult.matchedQuestionId 
+      ? questionsRef.current.find(q => q.id === aiResult.matchedQuestionId)
+      : findMatchingQuestion(text);
       
-      // Detect team mentions
-      const mentionedUserIds = detectMentions(text, usersRef.current);
+    if (matchedQuestion && aiResult.confidence > 0.3) {
+      console.log('Matched question:', matchedQuestion.text, 'confidence:', aiResult.confidence);
+      
+      // Use AI-extracted mentions or fall back to pattern matching
+      const mentionedUserIds = aiResult.mentionedUserIds.length > 0 
+        ? aiResult.mentionedUserIds 
+        : detectMentions(text, usersRef.current);
       const mentionedNames = mentionedUserIds.map(id => usersRef.current.find(u => u.id === id)?.name).filter(Boolean);
+      
+      // Save to history FIRST (before updating current answer)
+      await saveAnswerHistory(
+        matchedQuestion.id, 
+        aiResult.extractedAnswer, 
+        currentUserRef.current?.name || 'STT', 
+        mentionedUserIds, 
+        'stt'
+      );
       
       // Auto-save as answer
       const { error } = await supabase
         .from('discovery_questions')
         .update({
           answered: true,
-          answer: text,
+          answer: aiResult.extractedAnswer,
           answered_by: currentUserRef.current?.name + ' (STT)',
           answered_at: new Date().toISOString(),
           mentioned_users: mentionedUserIds
@@ -763,7 +941,7 @@ export default function DiscoveryCockpit() {
         // Update local state
         setQuestions(prev => prev.map(q => 
           q.id === matchedQuestion.id 
-            ? { ...q, answered: true, answer: text, answered_by: currentUserRef.current?.name + ' (STT)', mentioned_users: mentionedUserIds }
+            ? { ...q, answered: true, answer: aiResult.extractedAnswer, answered_by: currentUserRef.current?.name + ' (STT)', mentioned_users: mentionedUserIds }
             : q
         ));
         
@@ -888,6 +1066,77 @@ export default function DiscoveryCockpit() {
 
     if (!error) {
       setUsers(users.map(u => u.id === userId ? { ...u, ...updates } : u));
+    }
+  };
+
+  // ==========================================
+  // TEAM NOTES FUNCTIONS
+  // ==========================================
+
+  const saveNoteDraft = async (userId: string, content: string) => {
+    if (!content.trim()) return;
+
+    const { data, error } = await supabase
+      .from('team_notes')
+      .insert({
+        user_id: userId,
+        content: content.trim(),
+        status: 'draft'
+      })
+      .select()
+      .single();
+
+    if (!error && data) {
+      setTeamNotes(prev => [data, ...prev]);
+      setNoteDraft(prev => ({ ...prev, [userId]: '' }));
+    }
+  };
+
+  const publishNote = async (noteId: string) => {
+    const { error } = await supabase
+      .from('team_notes')
+      .update({
+        status: 'published',
+        published_at: new Date().toISOString()
+      })
+      .eq('id', noteId);
+
+    if (!error) {
+      setTeamNotes(prev => prev.map(n => 
+        n.id === noteId 
+          ? { ...n, status: 'published', published_at: new Date().toISOString() }
+          : n
+      ));
+    }
+  };
+
+  const updateNote = async (noteId: string, content: string) => {
+    const { error } = await supabase
+      .from('team_notes')
+      .update({
+        content: content.trim(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', noteId);
+
+    if (!error) {
+      setTeamNotes(prev => prev.map(n => 
+        n.id === noteId 
+          ? { ...n, content: content.trim(), updated_at: new Date().toISOString() }
+          : n
+      ));
+      setEditingNoteId(null);
+    }
+  };
+
+  const deleteNote = async (noteId: string) => {
+    const { error } = await supabase
+      .from('team_notes')
+      .delete()
+      .eq('id', noteId);
+
+    if (!error) {
+      setTeamNotes(prev => prev.filter(n => n.id !== noteId));
     }
   };
 
@@ -1096,6 +1345,18 @@ export default function DiscoveryCockpit() {
     return questions.filter(q => q.mentioned_users?.includes(userId));
   };
 
+  // Get answer history entries that mention a specific user (shows all changes over time)
+  const getAnswerHistoryForUser = (userId: string) => {
+    return answerHistory.filter(h => h.mentioned_users?.includes(userId));
+  };
+
+  // Get full history for a question (shows all versions)
+  const getQuestionHistory = (questionId: string) => {
+    return answerHistory.filter(h => h.question_id === questionId).sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  };
+
   // ==========================================
   // LOGIN SCREEN
   // ==========================================
@@ -1300,9 +1561,17 @@ export default function DiscoveryCockpit() {
                     const memberTasks = userTasks.filter(t => t.user_id === member.id);
                     const memberBlockers = blockers.filter(b => b.user_id === member.id && b.status !== 'resolved');
                     const memberMentions = getQuestionsAboutUser(member.id);
+                    const memberNotes = teamNotes.filter(n => n.user_id === member.id && n.status === 'published');
                     
                     return (
-                      <div key={member.id} className="flex items-center justify-between p-2 bg-slate-700/50 rounded">
+                      <div 
+                        key={member.id} 
+                        className="flex items-center justify-between p-2 bg-slate-700/50 rounded hover:bg-slate-600/50 cursor-pointer transition-colors"
+                        onClick={() => {
+                          setEditingUserId(member.id);
+                          setView('team');
+                        }}
+                      >
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 rounded-full bg-slate-600 flex items-center justify-center text-sm">
                             {member.name.charAt(0)}
@@ -1319,6 +1588,9 @@ export default function DiscoveryCockpit() {
                           <span className="text-xs text-slate-400">{memberTasks.length} task</span>
                           {memberMentions.length > 0 && (
                             <Badge variant="info">{memberMentions.length} menzioni</Badge>
+                          )}
+                          {memberNotes.length > 0 && (
+                            <Badge variant="success">{memberNotes.length} 📝</Badge>
                           )}
                           {memberBlockers.length > 0 && (
                             <Badge variant="danger">{memberBlockers.length} blocchi</Badge>
@@ -1338,7 +1610,14 @@ export default function DiscoveryCockpit() {
                 ) : (
                   <div className="space-y-2">
                     {criticalGaps.slice(0, 5).map(q => (
-                      <div key={q.id} className="p-2 bg-red-900/20 border-l-2 border-red-500 rounded-r">
+                      <div 
+                        key={q.id} 
+                        className="p-2 bg-red-900/20 border-l-2 border-red-500 rounded-r hover:bg-red-900/30 cursor-pointer transition-colors"
+                        onClick={() => {
+                          setActiveQuestionId(q.id);
+                          setView('call');
+                        }}
+                      >
                         <p className="text-sm text-red-200">{q.text}</p>
                       </div>
                     ))}
@@ -1387,6 +1666,50 @@ export default function DiscoveryCockpit() {
                 </div>
               </Card>
             )}
+
+            {/* Team Notes - Published */}
+            {(() => {
+              const publishedNotes = teamNotes.filter(n => n.status === 'published');
+              if (publishedNotes.length === 0) return null;
+              
+              return (
+                <Card className="p-4 border-teal-700">
+                  <h3 className="font-semibold text-teal-400 mb-4">📝 Note del Team</h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    {publishedNotes.slice(0, 6).map(note => {
+                      const author = users.find(u => u.id === note.user_id);
+                      return (
+                        <div 
+                          key={note.id} 
+                          className="p-3 bg-teal-900/20 rounded border-l-2 border-teal-500 hover:bg-teal-900/30 cursor-pointer transition-colors"
+                          onClick={() => {
+                            if (author) {
+                              setEditingUserId(author.id);
+                              setView('team');
+                            }
+                          }}
+                        >
+                          <p className="text-sm text-teal-200">{note.content}</p>
+                          <div className="flex items-center justify-between mt-2">
+                            <span className="text-xs text-slate-400">
+                              {author?.name} • {note.published_at && new Date(note.published_at).toLocaleDateString('it-IT')}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {publishedNotes.length > 6 && (
+                    <button 
+                      className="text-xs text-teal-400 mt-3 text-center w-full hover:underline"
+                      onClick={() => setView('team')}
+                    >
+                      +{publishedNotes.length - 6} altre note • Vai su Team per vedere tutto →
+                    </button>
+                  )}
+                </Card>
+              );
+            })()}
           </div>
         )}
 
@@ -1539,6 +1862,44 @@ export default function DiscoveryCockpit() {
                                   👥 Menzionati: {q.mentioned_users.map(uid => users.find(u => u.id === uid)?.name).filter(Boolean).join(', ')}
                                 </p>
                               )}
+                              
+                              {/* Answer History Timeline */}
+                              {(() => {
+                                const history = getQuestionHistory(q.id);
+                                if (history.length <= 1) return null;
+                                return (
+                                  <div className="mt-3 pt-3 border-t border-slate-700">
+                                    <p className="text-xs text-slate-400 uppercase mb-2">🕐 Storico modifiche ({history.length})</p>
+                                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                                      {history.map((h, idx) => {
+                                        const mentionedNames = (h.mentioned_users || [])
+                                          .map(uid => users.find(u => u.id === uid)?.name)
+                                          .filter(Boolean);
+                                        return (
+                                          <div key={h.id} className={`p-2 rounded text-xs ${idx === 0 ? 'bg-teal-900/20 border-l-2 border-teal-500' : 'bg-slate-700/30 border-l-2 border-slate-600'}`}>
+                                            <div className="flex items-center justify-between mb-1">
+                                              <span className="text-slate-500">
+                                                {new Date(h.created_at).toLocaleString('it-IT')}
+                                              </span>
+                                              <div className="flex items-center gap-1">
+                                                {idx === 0 && <Badge variant="success">Attuale</Badge>}
+                                                <Badge variant={h.source === 'stt_correction' ? 'warning' : h.source === 'stt' ? 'info' : 'default'}>
+                                                  {h.source === 'stt_correction' ? '🔄 Correzione' : h.source === 'stt' ? '🎤 STT' : '✏️ Manuale'}
+                                                </Badge>
+                                              </div>
+                                            </div>
+                                            <p className={`${idx === 0 ? 'text-teal-200' : 'text-slate-400'}`}>"{h.answer}"</p>
+                                            {mentionedNames.length > 0 && (
+                                              <p className="text-xs text-slate-500 mt-1">👥 {mentionedNames.join(', ')}</p>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
+                              
                               <div className="flex gap-2 mt-3">
                                 <Button size="sm" variant="secondary" onClick={() => { setEditingAnswerId(q.id); setAnswerDraft(q.answer || ''); }}>
                                   <Icons.Edit /> Modifica
@@ -1651,6 +2012,7 @@ export default function DiscoveryCockpit() {
                 const memberTasks = userTasks.filter(t => t.user_id === member.id);
                 const memberBlockers = blockers.filter(b => b.user_id === member.id);
                 const memberMentions = getQuestionsAboutUser(member.id);
+                const memberHistory = getAnswerHistoryForUser(member.id);
                 const isEditing = editingUserId === member.id;
                 const canEdit = isGodMode || (canEditOwnProfile && currentUser?.id === member.id) || currentUser?.role === 'owner';
 
@@ -1702,10 +2064,10 @@ export default function DiscoveryCockpit() {
                       )}
                     </div>
 
-                    {/* Mentions - NEW */}
+                    {/* Current Mentions */}
                     {memberMentions.length > 0 && (
                       <div className="mb-4">
-                        <p className="text-xs text-slate-400 uppercase mb-2">📝 Menzionato in ({memberMentions.length} risposte)</p>
+                        <p className="text-xs text-slate-400 uppercase mb-2">📝 Attualmente menzionato in ({memberMentions.length})</p>
                         <div className="space-y-1">
                           {memberMentions.slice(0, 3).map(q => (
                             <div key={q.id} className="p-2 bg-teal-900/20 rounded text-xs">
@@ -1720,13 +2082,46 @@ export default function DiscoveryCockpit() {
                       </div>
                     )}
 
+                    {/* History Timeline - Shows ALL mentions over time */}
+                    {memberHistory.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-xs text-slate-400 uppercase mb-2">🕐 Storico menzioni ({memberHistory.length})</p>
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                          {memberHistory.slice(0, 5).map(h => {
+                            const question = questions.find(q => q.id === h.question_id);
+                            return (
+                              <div key={h.id} className="p-2 bg-slate-700/30 rounded text-xs border-l-2 border-slate-500">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-slate-500">
+                                    {new Date(h.created_at).toLocaleString('it-IT', { 
+                                      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
+                                    })}
+                                  </span>
+                                  <Badge variant={h.source === 'stt_correction' ? 'warning' : h.source === 'stt' ? 'info' : 'default'}>
+                                    {h.source === 'stt_correction' ? '🔄' : h.source === 'stt' ? '🎤' : '✏️'}
+                                  </Badge>
+                                </div>
+                                <p className="text-slate-300 mt-1">"{h.answer.substring(0, 80)}..."</p>
+                                {question && (
+                                  <p className="text-slate-500 text-xs mt-1">Re: {question.text.substring(0, 40)}...</p>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {memberHistory.length > 5 && (
+                            <p className="text-xs text-slate-500">+{memberHistory.length - 5} altri nel cronologico</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Tasks */}
                     <div className="mb-4">
                       <p className="text-xs text-slate-400 uppercase mb-2">Task ({memberTasks.length}/10)</p>
                       <div className="flex flex-wrap gap-1 mb-2">
                         {memberTasks.map(task => (
-                          <span key={task.id} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700 rounded text-xs text-slate-300">
-                            {task.task_name}
+                          <span key={task.id} className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs ${task.is_custom ? 'bg-teal-700 text-teal-100' : 'bg-slate-700 text-slate-300'}`}>
+                            {task.is_custom && '✏️ '}{task.task_name}
                             {isEditing && (
                               <button onClick={() => removeUserTask(task.id)} className="text-red-400 hover:text-red-300">
                                 <Icons.X />
@@ -1736,19 +2131,180 @@ export default function DiscoveryCockpit() {
                         ))}
                       </div>
                       {isEditing && memberTasks.length < 10 && (
-                        <Select
-                          value=""
-                          onChange={(val) => {
-                            const task = taskDefinitions.find(t => t.id === val);
-                            if (task) addUserTask(member.id, task.id, task.name);
-                          }}
-                          options={taskDefinitions
-                            .filter(t => !memberTasks.some(mt => mt.task_id === t.id))
-                            .map(t => ({ value: t.id, label: t.name }))}
-                          placeholder="+ Aggiungi task..."
-                        />
+                        <div className="space-y-2">
+                          <Select
+                            value=""
+                            onChange={(val) => {
+                              const task = taskDefinitions.find(t => t.id === val);
+                              if (task) addUserTask(member.id, task.id, task.name, false);
+                            }}
+                            options={taskDefinitions
+                              .filter(t => !memberTasks.some(mt => mt.task_id === t.id))
+                              .map(t => ({ value: t.id, label: t.name }))}
+                            placeholder="+ Scegli da lista..."
+                          />
+                          <div className="flex gap-2">
+                            <Input
+                              value={customTaskDraft[member.id] || ''}
+                              onChange={(val) => setCustomTaskDraft(prev => ({ ...prev, [member.id]: val }))}
+                              placeholder="Scrivi task personalizzato..."
+                              className="flex-1 text-sm"
+                            />
+                            {customTaskDraft[member.id]?.trim() && (
+                              <Button 
+                                size="sm"
+                                onClick={() => {
+                                  const customId = `custom_${Date.now()}`;
+                                  addUserTask(member.id, customId, customTaskDraft[member.id].trim(), true);
+                                  setCustomTaskDraft(prev => ({ ...prev, [member.id]: '' }));
+                                }}
+                              >
+                                + Aggiungi
+                              </Button>
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
+
+                    {/* Team Notes & Ideas */}
+                    {(canViewAll || currentUser?.id === member.id) && (
+                      <div className="mb-4">
+                        <p className="text-xs text-slate-400 uppercase mb-2">📝 Note & Idee</p>
+                        
+                        {/* Add new note - only for own profile or consultant */}
+                        {(currentUser?.id === member.id || isGodMode) && (
+                          <div className="mb-3">
+                            <TextArea
+                              value={noteDraft[member.id] || ''}
+                              onChange={(val) => setNoteDraft(prev => ({ ...prev, [member.id]: val }))}
+                              placeholder="Scrivi una nota, idea o suggerimento..."
+                              rows={2}
+                            />
+                            {noteDraft[member.id]?.trim() && (
+                              <div className="flex gap-2 mt-2">
+                                <Button 
+                                  size="sm" 
+                                  variant="secondary"
+                                  onClick={() => saveNoteDraft(member.id, noteDraft[member.id])}
+                                >
+                                  💾 Salva bozza
+                                </Button>
+                                <Button 
+                                  size="sm"
+                                  onClick={async () => {
+                                    const { data } = await supabase
+                                      .from('team_notes')
+                                      .insert({
+                                        user_id: member.id,
+                                        content: noteDraft[member.id].trim(),
+                                        status: 'published',
+                                        published_at: new Date().toISOString()
+                                      })
+                                      .select()
+                                      .single();
+                                    if (data) {
+                                      setTeamNotes(prev => [data, ...prev]);
+                                      setNoteDraft(prev => ({ ...prev, [member.id]: '' }));
+                                    }
+                                  }}
+                                >
+                                  🚀 Pubblica su dashboard
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Existing notes */}
+                        {(() => {
+                          const memberNotes = teamNotes.filter(n => n.user_id === member.id);
+                          const drafts = memberNotes.filter(n => n.status === 'draft');
+                          const published = memberNotes.filter(n => n.status === 'published');
+                          
+                          return (
+                            <div className="space-y-2">
+                              {/* Drafts - only visible to owner or consultant */}
+                              {(currentUser?.id === member.id || isGodMode) && drafts.length > 0 && (
+                                <div className="space-y-1">
+                                  <p className="text-xs text-amber-400">📋 Bozze ({drafts.length})</p>
+                                  {drafts.map(note => (
+                                    <div key={note.id} className="p-2 bg-amber-900/20 rounded text-xs border-l-2 border-amber-500">
+                                      {editingNoteId === note.id ? (
+                                        <div>
+                                          <TextArea
+                                            value={note.content}
+                                            onChange={(val) => setTeamNotes(prev => prev.map(n => n.id === note.id ? {...n, content: val} : n))}
+                                            rows={2}
+                                          />
+                                          <div className="flex gap-1 mt-1">
+                                            <Button size="sm" variant="ghost" onClick={() => updateNote(note.id, note.content)}>
+                                              💾
+                                            </Button>
+                                            <Button size="sm" variant="ghost" onClick={() => setEditingNoteId(null)}>
+                                              ✕
+                                            </Button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <p className="text-amber-200 mb-2">{note.content}</p>
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-slate-500">
+                                              {new Date(note.created_at).toLocaleDateString('it-IT')}
+                                            </span>
+                                            <div className="flex gap-1">
+                                              <Button size="sm" variant="ghost" onClick={() => setEditingNoteId(note.id)}>
+                                                ✏️
+                                              </Button>
+                                              <Button size="sm" variant="ghost" onClick={() => publishNote(note.id)}>
+                                                🚀 Pubblica
+                                              </Button>
+                                              <Button size="sm" variant="ghost" onClick={() => deleteNote(note.id)}>
+                                                🗑️
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Published notes - visible to all */}
+                              {published.length > 0 && (
+                                <div className="space-y-1">
+                                  <p className="text-xs text-teal-400">✅ Pubblicate ({published.length})</p>
+                                  {published.slice(0, 3).map(note => (
+                                    <div key={note.id} className="p-2 bg-teal-900/20 rounded text-xs border-l-2 border-teal-500">
+                                      <p className="text-teal-200">{note.content}</p>
+                                      <div className="flex items-center justify-between mt-1">
+                                        <span className="text-slate-500">
+                                          {note.published_at && new Date(note.published_at).toLocaleDateString('it-IT')}
+                                        </span>
+                                        {(currentUser?.id === member.id || isGodMode) && (
+                                          <Button size="sm" variant="ghost" onClick={() => deleteNote(note.id)}>
+                                            🗑️
+                                          </Button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {published.length > 3 && (
+                                    <p className="text-xs text-slate-500">+{published.length - 3} altre note</p>
+                                  )}
+                                </div>
+                              )}
+
+                              {memberNotes.length === 0 && (
+                                <p className="text-xs text-slate-500 italic">Nessuna nota</p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
 
                     {/* Blockers */}
                     {(canViewAll || currentUser?.id === member.id) && memberBlockers.length > 0 && (
@@ -1821,8 +2377,9 @@ export default function DiscoveryCockpit() {
                   <Input
                     type="number"
                     value={project?.budget_total?.toString() || ''}
-                    onChange={(val) => canEditProject && updateProject({ budget_total: parseInt(val) || 0 })}
+                    onChange={(val) => updateProject({ budget_total: parseInt(val) || 0 })}
                     placeholder="Es: 100000"
+                    disabled={!canEditProject}
                   />
                 </div>
                 <div>
@@ -1830,8 +2387,9 @@ export default function DiscoveryCockpit() {
                   <Input
                     type="number"
                     value={project?.margin_target?.toString() || ''}
-                    onChange={(val) => canEditProject && updateProject({ margin_target: parseInt(val) || 0 })}
+                    onChange={(val) => updateProject({ margin_target: parseInt(val) || 0 })}
                     placeholder="Es: 30"
+                    disabled={!canEditProject}
                   />
                 </div>
               </div>
@@ -1840,9 +2398,10 @@ export default function DiscoveryCockpit() {
                 <label className="text-xs text-slate-400 uppercase">Note Strategiche</label>
                 <TextArea
                   value={project?.strategic_notes || ''}
-                  onChange={(val) => canEditProject && updateProject({ strategic_notes: val })}
+                  onChange={(val) => updateProject({ strategic_notes: val })}
                   placeholder="Note riservate visibili solo a owner e consultant..."
                   rows={4}
+                  disabled={!canEditProject}
                 />
               </div>
 
