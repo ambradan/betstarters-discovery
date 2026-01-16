@@ -1125,6 +1125,8 @@ Rispondi SOLO in JSON:
   };
 
   const [rewritingNoteId, setRewritingNoteId] = useState<string | null>(null);
+  const [rewritingAnswerId, setRewritingAnswerId] = useState<string | null>(null);
+  const [rewritingAllAnswers, setRewritingAllAnswers] = useState(false);
 
   const rewriteNote = async (noteId: string) => {
     const note = teamNotes.find(n => n.id === noteId);
@@ -1194,6 +1196,135 @@ Scrivi SOLO la nota riscritta, iniziando direttamente con il contenuto.`
     }
 
     setRewritingNoteId(null);
+  };
+
+  // Rewrite a single answer
+  const rewriteAnswer = async (questionId: string) => {
+    const question = questions.find(q => q.id === questionId);
+    if (!question || !question.answer) return;
+
+    setRewritingAnswerId(questionId);
+
+    try {
+      const response = await fetch('/api/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-3-haiku-20240307',
+          max_tokens: 500,
+          messages: [{
+            role: 'user',
+            content: `Rielabora questa risposta di discovery call in modo più professionale e chiaro.
+
+DOMANDA: "${question.text}"
+
+RISPOSTA ORIGINALE: "${question.answer}"
+
+REGOLE ASSOLUTE:
+- NON inventare informazioni non presenti
+- NON aggiungere dettagli che non esistono nella risposta originale
+- Mantieni TUTTI i nomi e fatti menzionati
+- Rendi la risposta più chiara e strutturata
+- Se ci sono elenchi impliciti, rendili espliciti
+- Vai dritto al contenuto, niente preamboli
+
+Scrivi SOLO la risposta rielaborata.`
+          }]
+        })
+      });
+
+      const data = await response.json();
+      const rewritten = data.content?.[0]?.text?.trim();
+
+      if (rewritten) {
+        // Save to history first
+        await saveAnswerHistory(questionId, rewritten, currentUser?.name + ' (AI)', question.mentioned_users || [], 'manual');
+        
+        // Update in DB
+        const { error } = await supabase
+          .from('discovery_questions')
+          .update({ answer: rewritten, answered_at: new Date().toISOString() })
+          .eq('id', questionId);
+
+        if (!error) {
+          setQuestions(prev => prev.map(q => 
+            q.id === questionId ? { ...q, answer: rewritten, answered_at: new Date().toISOString() } : q
+          ));
+        }
+      }
+    } catch (error) {
+      console.error('Rewrite error:', error);
+      alert('Errore durante la rielaborazione');
+    }
+
+    setRewritingAnswerId(null);
+  };
+
+  // Rewrite ALL answers
+  const rewriteAllAnswers = async () => {
+    const toRewrite = questions.filter(q => q.answered && q.answer);
+    if (toRewrite.length === 0) return;
+
+    if (!confirm(`Rielaborare tutte le ${toRewrite.length} risposte? Questa operazione potrebbe richiedere tempo.`)) {
+      return;
+    }
+
+    setRewritingAllAnswers(true);
+
+    for (const question of toRewrite) {
+      try {
+        const response = await fetch('/api/claude', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'claude-3-haiku-20240307',
+            max_tokens: 500,
+            messages: [{
+              role: 'user',
+              content: `Rielabora questa risposta di discovery call in modo più professionale e chiaro.
+
+DOMANDA: "${question.text}"
+
+RISPOSTA ORIGINALE: "${question.answer}"
+
+REGOLE ASSOLUTE:
+- NON inventare informazioni non presenti
+- NON aggiungere dettagli che non esistono nella risposta originale
+- Mantieni TUTTI i nomi e fatti menzionati
+- Rendi la risposta più chiara e strutturata
+- Se ci sono elenchi impliciti, rendili espliciti
+- Vai dritto al contenuto, niente preamboli
+
+Scrivi SOLO la risposta rielaborata.`
+            }]
+          })
+        });
+
+        const data = await response.json();
+        const rewritten = data.content?.[0]?.text?.trim();
+
+        if (rewritten) {
+          await saveAnswerHistory(question.id, rewritten, currentUser?.name + ' (AI batch)', question.mentioned_users || [], 'manual');
+          
+          await supabase
+            .from('discovery_questions')
+            .update({ answer: rewritten, answered_at: new Date().toISOString() })
+            .eq('id', question.id);
+
+          setQuestions(prev => prev.map(q => 
+            q.id === question.id ? { ...q, answer: rewritten, answered_at: new Date().toISOString() } : q
+          ));
+        }
+
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        console.error('Rewrite error for question:', question.id, error);
+      }
+    }
+
+    setRewritingAllAnswers(false);
+    alert('Rielaborazione completata!');
   };
 
   const answerQuestion = async (questionId: string) => {
@@ -2104,7 +2235,17 @@ Scrivi SOLO la nota riscritta, iniziando direttamente con il contenuto.`
             {/* ANSWERED QUESTIONS - NEW */}
             {showAnsweredQuestions && answeredQuestions.length > 0 && (
               <Card className="p-4 border-green-700">
-                <h3 className="font-semibold text-green-400 mb-4">✅ Domande Completate (click per vedere/modificare)</h3>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-green-400">✅ Domande Completate (click per vedere/modificare)</h3>
+                  <Button 
+                    size="sm" 
+                    variant="secondary"
+                    onClick={rewriteAllAnswers}
+                    disabled={rewritingAllAnswers}
+                  >
+                    {rewritingAllAnswers ? '⏳ Rielaborando...' : '✨ Rielabora tutte'}
+                  </Button>
+                </div>
                 <div className="space-y-2">
                   {answeredQuestions.map(q => (
                     <div key={q.id}>
@@ -2195,6 +2336,14 @@ Scrivi SOLO la nota riscritta, iniziando direttamente con il contenuto.`
                               <div className="flex gap-2 mt-3">
                                 <Button size="sm" variant="secondary" onClick={() => { setEditingAnswerId(q.id); setAnswerDraft(q.answer || ''); }}>
                                   <Icons.Edit /> Modifica
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="secondary" 
+                                  onClick={() => rewriteAnswer(q.id)}
+                                  disabled={rewritingAnswerId === q.id || rewritingAllAnswers}
+                                >
+                                  {rewritingAnswerId === q.id ? '⏳...' : '✨ Rielabora'}
                                 </Button>
                                 <Button size="sm" variant="danger" onClick={() => deleteAnswer(q.id)}>
                                   <Icons.Trash /> Elimina
@@ -2791,13 +2940,25 @@ Scrivi SOLO la nota riscritta, iniziando direttamente con il contenuto.`
                       answered_by: q.answered_by,
                       mentioned_users: q.mentioned_users?.map(uid => users.find(u => u.id === uid)?.name)
                     })),
-                    team_summary: teamMembers.map(m => ({
-                      name: m.name,
-                      market: m.market_focus,
-                      work_type: m.work_type,
-                      tasks: userTasks.filter(t => t.user_id === m.id).map(t => t.task_name),
-                      mentions: getQuestionsAboutUser(m.id).length,
-                      open_blockers: blockers.filter(b => b.user_id === m.id && b.status !== 'resolved').length
+                    team_summary: teamMembers.map(m => {
+                      const memberNotes = teamNotes.filter(n => n.user_id === m.id);
+                      return {
+                        name: m.name,
+                        market: m.market_focus,
+                        work_type: m.work_type,
+                        tasks: userTasks.filter(t => t.user_id === m.id).map(t => t.task_name),
+                        mentions: getQuestionsAboutUser(m.id).length,
+                        open_blockers: blockers.filter(b => b.user_id === m.id && b.status !== 'resolved').length,
+                        notes_draft: memberNotes.filter(n => n.status === 'draft').map(n => n.content),
+                        notes_published: memberNotes.filter(n => n.status === 'published').map(n => n.content)
+                      };
+                    }),
+                    team_notes_all: teamNotes.map(n => ({
+                      author: users.find(u => u.id === n.user_id)?.name,
+                      content: n.content,
+                      status: n.status,
+                      created_at: n.created_at,
+                      published_at: n.published_at
                     })),
                     stt_extractions: sttExtractions,
                     decisions: decisions.slice(0, 20)
