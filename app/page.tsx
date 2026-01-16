@@ -157,6 +157,7 @@ interface STTExtraction {
   quote?: string;
   confirmed: boolean;
   created_at: string;
+  timestamp?: string;
 }
 
 // ============================================
