@@ -17,9 +17,6 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// Claude API for smart extraction (optional - falls back to pattern matching)
-const CLAUDE_API_KEY = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || '';
-
 // ============================================
 // TYPES
 // ============================================
@@ -742,28 +739,14 @@ export default function DiscoveryCockpit() {
     mentionedUserIds: string[];
     confidence: number;
   }> => {
-    // If no API key, fall back to pattern matching
-    if (!CLAUDE_API_KEY) {
-      const matched = findMatchingQuestion(text);
-      const mentions = detectMentions(text, users);
-      return {
-        matchedQuestionId: matched?.id || null,
-        extractedAnswer: text,
-        mentionedUserIds: mentions,
-        confidence: matched ? 0.5 : 0
-      };
-    }
-
     try {
       const unanswered = questions.filter(q => !q.answered);
       const teamNames = users.filter(u => u.role === 'team_member').map(u => u.name);
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await fetch('/api/claude', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': CLAUDE_API_KEY,
-          'anthropic-version': '2023-06-01'
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           model: 'claude-3-haiku-20240307',
@@ -1145,20 +1128,18 @@ Rispondi SOLO in JSON:
 
   const rewriteNote = async (noteId: string) => {
     const note = teamNotes.find(n => n.id === noteId);
-    if (!note || !CLAUDE_API_KEY) {
-      alert('API key Claude non configurata');
+    if (!note) {
+      alert('Nota non trovata');
       return;
     }
 
     setRewritingNoteId(noteId);
 
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await fetch('/api/claude', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': CLAUDE_API_KEY,
-          'anthropic-version': '2023-06-01'
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           model: 'claude-3-haiku-20240307',
