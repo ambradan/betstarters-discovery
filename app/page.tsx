@@ -1133,6 +1133,9 @@ Rispondi SOLO in JSON:
       return;
     }
 
+    const noteAuthor = users.find(u => u.id === note.user_id);
+    const authorName = noteAuthor?.name || 'la persona';
+
     setRewritingNoteId(noteId);
 
     try {
@@ -1146,20 +1149,20 @@ Rispondi SOLO in JSON:
           max_tokens: 500,
           messages: [{
             role: 'user',
-            content: `Riscrivi questa nota in modo più professionale e strutturato. 
-REGOLE FERREE:
-- NON inventare informazioni
-- NON aggiungere dettagli non presenti
-- Mantieni TUTTI i fatti e nomi menzionati
-- Solo riformulare per chiarezza
-- Usa frasi complete e punteggiatura corretta
-- Se ci sono elenchi impliciti, rendili espliciti
-- Massimo 2-3 frasi in più dell'originale
+            content: `Questa è una nota scritta da ${authorName} su se stesso/a e il suo lavoro. Riscrivila in terza persona, in modo professionale e chiaro.
+
+REGOLE ASSOLUTE:
+- Parla di ${authorName} in terza persona (es. "${authorName} si occupa di...")
+- NON iniziare con "Ecco", "Di seguito", "La nota riscritta" o simili
+- NON aggiungere informazioni non presenti
+- NON inventare nulla
+- Vai DRITTO al contenuto
+- Usa frasi complete e professionali
 
 NOTA ORIGINALE:
 "${note.content}"
 
-Rispondi SOLO con la nota riscritta, niente altro.`
+Scrivi SOLO la nota riscritta, iniziando direttamente con il contenuto.`
           }]
         })
       });
