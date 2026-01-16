@@ -1434,7 +1434,7 @@ Rispondi SOLO con la nota riscritta, niente altro.`
 
   const exportToPDF = () => {
     const today = new Date().toLocaleDateString('it-IT');
-    const categories = [...new Set(questions.map(q => q.category))];
+    const categories = Array.from(new Set(questions.map(q => q.category)));
     
     // Build HTML content
     let html = `
