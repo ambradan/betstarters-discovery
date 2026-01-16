@@ -132,6 +132,29 @@ interface RoadmapTask {
   due_date?: string;
   completed_at?: string;
   created_at: string;
+  updated_by?: string;
+  updated_at?: string;
+}
+
+interface RoadmapChange {
+  id: string;
+  task_id: string;
+  changed_by: string;
+  change_type: 'status' | 'notes' | 'created';
+  old_value?: string;
+  new_value: string;
+  created_at: string;
+}
+
+interface SystemNotification {
+  id: string;
+  type: 'roadmap_update' | 'profile_update' | 'note_published';
+  title: string;
+  message: string;
+  for_roles: string[]; // ['owner', 'consultant']
+  created_by: string;
+  read_by: string[]; // user IDs who read it
+  created_at: string;
 }
 
 // Roadmap phases and tasks data
@@ -534,6 +557,9 @@ export default function DiscoveryCockpit() {
   const [answerHistory, setAnswerHistory] = useState<AnswerHistory[]>([]);
   const [teamNotes, setTeamNotes] = useState<TeamNote[]>([]);
   const [roadmapTasks, setRoadmapTasks] = useState<RoadmapTask[]>([]);
+  const [roadmapChanges, setRoadmapChanges] = useState<RoadmapChange[]>([]);
+  const [notifications, setNotifications] = useState<SystemNotification[]>([]);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // UI State
   const [loading, setLoading] = useState(true);
@@ -642,6 +668,14 @@ export default function DiscoveryCockpit() {
         }));
         setRoadmapTasks(initialTasks);
       }
+
+      // Load roadmap changes (last 50)
+      const { data: changesData } = await supabase.from('roadmap_changes').select('*').order('created_at', { ascending: false }).limit(50);
+      if (changesData) setRoadmapChanges(changesData);
+
+      // Load notifications
+      const { data: notifData } = await supabase.from('system_notifications').select('*').order('created_at', { ascending: false }).limit(30);
+      if (notifData) setNotifications(notifData);
 
     } catch (error) {
       console.error('Error loading data:', error);
@@ -1152,6 +1186,7 @@ Rispondi SOLO in JSON:
   };
 
   const publishNote = async (noteId: string) => {
+    const note = teamNotes.find(n => n.id === noteId);
     const { error } = await supabase
       .from('team_notes')
       .update({
@@ -1166,6 +1201,17 @@ Rispondi SOLO in JSON:
           ? { ...n, status: 'published', published_at: new Date().toISOString() }
           : n
       ));
+
+      // Notify owner and consultant
+      if (note && currentUser) {
+        const author = users.find(u => u.id === note.user_id);
+        await createNotification(
+          'note_published',
+          `📝 Nuova nota pubblicata`,
+          `${author?.name || 'Qualcuno'} ha pubblicato: "${note.content.substring(0, 80)}${note.content.length > 80 ? '...' : ''}"`,
+          currentUser.name
+        );
+      }
     }
   };
 
@@ -1402,14 +1448,53 @@ Scrivi SOLO la risposta rielaborata.`
     alert('Rielaborazione completata!');
   };
 
+  // Create notification for owner and consultant
+  const createNotification = async (type: SystemNotification['type'], title: string, message: string, createdBy: string) => {
+    const notification: SystemNotification = {
+      id: crypto.randomUUID(),
+      type,
+      title,
+      message,
+      for_roles: ['owner', 'consultant'],
+      created_by: createdBy,
+      read_by: [],
+      created_at: new Date().toISOString()
+    };
+
+    await supabase.from('system_notifications').insert(notification);
+    setNotifications(prev => [notification, ...prev]);
+  };
+
+  const markNotificationRead = async (notifId: string) => {
+    if (!currentUser) return;
+    const notif = notifications.find(n => n.id === notifId);
+    if (!notif || notif.read_by.includes(currentUser.id)) return;
+
+    const newReadBy = [...notif.read_by, currentUser.id];
+    await supabase.from('system_notifications').update({ read_by: newReadBy }).eq('id', notifId);
+    setNotifications(prev => prev.map(n => n.id === notifId ? { ...n, read_by: newReadBy } : n));
+  };
+
+  const unreadNotifications = notifications.filter(n => 
+    currentUser && 
+    (n.for_roles.includes(currentUser.role)) && 
+    !n.read_by.includes(currentUser.id)
+  );
+
   // Roadmap task management
   const updateRoadmapTaskStatus = async (taskId: string, status: RoadmapTask['status']) => {
     const task = roadmapTasks.find(t => t.task_id === taskId);
-    if (!task) return;
+    if (!task || !currentUser) return;
 
+    const oldStatus = task.status;
+    if (oldStatus === status) return; // No change
+
+    const now = new Date().toISOString();
     const updates: Partial<RoadmapTask> = { 
       status,
-      completed_at: status === 'done' ? new Date().toISOString() : undefined
+      completed_at: status === 'done' ? now : undefined,
+      updated_by: currentUser.name,
+      updated_at: now
     };
 
     // Try to update in DB
@@ -1421,7 +1506,36 @@ Scrivi SOLO la risposta rielaborata.`
         id: task.id || taskId
       });
 
-    // Update local state regardless
+    // Log the change
+    const change: RoadmapChange = {
+      id: crypto.randomUUID(),
+      task_id: taskId,
+      changed_by: currentUser.name,
+      change_type: 'status',
+      old_value: oldStatus,
+      new_value: status,
+      created_at: now
+    };
+    await supabase.from('roadmap_changes').insert(change);
+    setRoadmapChanges(prev => [change, ...prev]);
+
+    // Create notification for owner and consultant
+    const statusLabels: Record<string, string> = {
+      todo: 'Da fare',
+      in_progress: 'In corso',
+      done: 'Completato ✓',
+      blocked: 'Bloccato 🚫'
+    };
+    const phase = ROADMAP_PHASES.find(p => p.phase === task.phase);
+    
+    await createNotification(
+      'roadmap_update',
+      `📋 Roadmap: ${task.task_id}`,
+      `${currentUser.name} ha cambiato "${task.title}" da "${statusLabels[oldStatus]}" a "${statusLabels[status]}" (Fase ${task.phase}: ${phase?.name})`,
+      currentUser.name
+    );
+
+    // Update local state
     setRoadmapTasks(prev => prev.map(t => 
       t.task_id === taskId ? { ...t, ...updates } : t
     ));
@@ -2042,6 +2156,20 @@ Scrivi SOLO la risposta rielaborata.`
                 </p>
               </div>
             )}
+            {/* Notification bell */}
+            {canViewOwnerData && (
+              <button 
+                onClick={() => setShowNotifications(!showNotifications)}
+                className="relative p-1 text-slate-400 hover:text-white"
+              >
+                🔔
+                {unreadNotifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center text-white">
+                    {unreadNotifications.length}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
           {!sidebarCollapsed && (
             <button 
@@ -2052,6 +2180,41 @@ Scrivi SOLO la risposta rielaborata.`
             </button>
           )}
         </div>
+
+        {/* Notifications panel */}
+        {showNotifications && canViewOwnerData && (
+          <div className="absolute bottom-20 left-4 right-4 bg-slate-800 border border-slate-600 rounded-lg shadow-xl max-h-80 overflow-y-auto z-50">
+            <div className="p-3 border-b border-slate-700 flex items-center justify-between">
+              <span className="font-semibold text-white text-sm">🔔 Notifiche</span>
+              <button onClick={() => setShowNotifications(false)} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+            {notifications.length === 0 ? (
+              <p className="p-4 text-slate-500 text-sm text-center">Nessuna notifica</p>
+            ) : (
+              <div className="divide-y divide-slate-700">
+                {notifications.slice(0, 15).map(n => {
+                  const isRead = currentUser && n.read_by.includes(currentUser.id);
+                  return (
+                    <div 
+                      key={n.id} 
+                      className={`p-3 hover:bg-slate-700/50 cursor-pointer ${!isRead ? 'bg-teal-900/20' : ''}`}
+                      onClick={() => markNotificationRead(n.id)}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-medium text-teal-400">{n.title}</span>
+                        {!isRead && <span className="w-2 h-2 bg-teal-400 rounded-full"></span>}
+                      </div>
+                      <p className="text-xs text-slate-300">{n.message}</p>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        {new Date(n.created_at).toLocaleString('it-IT')}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ========== MAIN CONTENT ========== */}
@@ -3070,6 +3233,11 @@ Scrivi SOLO la risposta rielaborata.`
                               <span className="text-xs text-slate-400">📦 {task.output}</span>
                               <span className="text-xs text-teal-400">👤 {task.owner}</span>
                             </div>
+                            {task.updated_by && (
+                              <p className="text-[10px] text-slate-500 mt-1">
+                                ✏️ Modificato da {task.updated_by} • {task.updated_at && new Date(task.updated_at).toLocaleString('it-IT')}
+                              </p>
+                            )}
                           </div>
                           
                           {/* Status buttons */}
