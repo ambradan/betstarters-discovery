@@ -2274,6 +2274,12 @@ Scrivi SOLO la risposta rielaborata.`
                     const memberBlockers = blockers.filter(b => b.user_id === member.id && b.status !== 'resolved');
                     const memberMentions = getQuestionsAboutUser(member.id);
                     const memberNotes = teamNotes.filter(n => n.user_id === member.id && n.status === 'published');
+                    const memberRoadmap = roadmapTasks.filter(t => 
+                      t.owner.toLowerCase().includes(member.name.toLowerCase()) ||
+                      t.owner.toLowerCase() === member.name.split(' ')[0].toLowerCase()
+                    );
+                    const roadmapDone = memberRoadmap.filter(t => t.status === 'done').length;
+                    const roadmapInProgress = memberRoadmap.filter(t => t.status === 'in_progress').length;
                     
                     return (
                       <div 
@@ -2298,6 +2304,11 @@ Scrivi SOLO la risposta rielaborata.`
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-xs text-slate-400">{memberTasks.length} task</span>
+                          {memberRoadmap.length > 0 && (
+                            <Badge variant={roadmapDone === memberRoadmap.length ? 'success' : roadmapInProgress > 0 ? 'warning' : 'default'}>
+                              🎯 {roadmapDone}/{memberRoadmap.length}
+                            </Badge>
+                          )}
                           {memberMentions.length > 0 && (
                             <Badge variant="info">{memberMentions.length} menzioni</Badge>
                           )}
@@ -2839,6 +2850,12 @@ Scrivi SOLO la risposta rielaborata.`
                 const memberBlockers = blockers.filter(b => b.user_id === member.id);
                 const memberMentions = getQuestionsAboutUser(member.id);
                 const memberHistory = getAnswerHistoryForUser(member.id);
+                const memberRoadmapAssigned = roadmapTasks.filter(t => 
+                  t.owner.toLowerCase().includes(member.name.toLowerCase()) ||
+                  t.owner.toLowerCase() === member.name.split(' ')[0].toLowerCase()
+                );
+                const roadmapDone = memberRoadmapAssigned.filter(t => t.status === 'done').length;
+                const roadmapInProgress = memberRoadmapAssigned.filter(t => t.status === 'in_progress').length;
                 const isEditing = editingUserId === member.id;
                 const canEdit = isGodMode || (canEditOwnProfile && currentUser?.id === member.id) || currentUser?.role === 'owner';
 
@@ -2857,6 +2874,16 @@ Scrivi SOLO la risposta rielaborata.`
                           <p className="text-sm text-slate-400">
                             {member.role === 'owner' ? '👑 Owner' : `📍 ${member.market_focus || '—'}`}
                           </p>
+                          {memberRoadmapAssigned.length > 0 && (
+                            <div className="flex items-center gap-2 mt-1">
+                              <Badge variant={roadmapDone === memberRoadmapAssigned.length ? 'success' : roadmapInProgress > 0 ? 'warning' : 'default'}>
+                                🎯 Roadmap: {roadmapDone}/{memberRoadmapAssigned.length}
+                              </Badge>
+                              {roadmapInProgress > 0 && (
+                                <span className="text-xs text-amber-400">({roadmapInProgress} in corso)</span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                       {canEdit && (
