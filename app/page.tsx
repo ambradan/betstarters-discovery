@@ -1637,7 +1637,7 @@ Rispondi SOLO con la nota riscritta, niente altro.`
           ${sttExtractions.slice(0, 20).map(e => `
             <tr>
               <td>${e.timestamp || '—'}</td>
-              <td>${e.confidence ? Math.round(e.confidence * 100) + '%' : '—'}</td>
+              <td>${e.confidence || '—'}</td>
               <td>${JSON.stringify(e).substring(0, 100)}...</td>
             </tr>
           `).join('')}
