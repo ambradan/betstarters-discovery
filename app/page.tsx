@@ -1558,6 +1558,20 @@ Scrivi SOLO la risposta rielaborata.`
   };
 
   // Roadmap stats for dashboard
+  // Helper to match roadmap tasks to team members
+  const getRoadmapTasksForMember = (memberName: string) => {
+    const memberNameLower = memberName.toLowerCase();
+    const memberFirstName = memberName.split(' ')[0].toLowerCase();
+    
+    return roadmapTasks.filter(t => {
+      const ownerLower = t.owner.toLowerCase();
+      // Match: owner "Marco" with member "Marco Zucco" OR owner "Anita" with member "Anita"
+      return memberNameLower.includes(ownerLower) || 
+             memberFirstName === ownerLower ||
+             ownerLower.includes(memberFirstName);
+    });
+  };
+
   const roadmapStats = {
     total: roadmapTasks.length || ROADMAP_TASKS_TEMPLATE.length,
     done: roadmapTasks.filter(t => t.status === 'done').length,
@@ -2274,10 +2288,7 @@ Scrivi SOLO la risposta rielaborata.`
                     const memberBlockers = blockers.filter(b => b.user_id === member.id && b.status !== 'resolved');
                     const memberMentions = getQuestionsAboutUser(member.id);
                     const memberNotes = teamNotes.filter(n => n.user_id === member.id && n.status === 'published');
-                    const memberRoadmap = roadmapTasks.filter(t => 
-                      t.owner.toLowerCase().includes(member.name.toLowerCase()) ||
-                      t.owner.toLowerCase() === member.name.split(' ')[0].toLowerCase()
-                    );
+                    const memberRoadmap = getRoadmapTasksForMember(member.name);
                     const roadmapDone = memberRoadmap.filter(t => t.status === 'done').length;
                     const roadmapInProgress = memberRoadmap.filter(t => t.status === 'in_progress').length;
                     
@@ -2850,10 +2861,7 @@ Scrivi SOLO la risposta rielaborata.`
                 const memberBlockers = blockers.filter(b => b.user_id === member.id);
                 const memberMentions = getQuestionsAboutUser(member.id);
                 const memberHistory = getAnswerHistoryForUser(member.id);
-                const memberRoadmapAssigned = roadmapTasks.filter(t => 
-                  t.owner.toLowerCase().includes(member.name.toLowerCase()) ||
-                  t.owner.toLowerCase() === member.name.split(' ')[0].toLowerCase()
-                );
+                const memberRoadmapAssigned = getRoadmapTasksForMember(member.name);
                 const roadmapDone = memberRoadmapAssigned.filter(t => t.status === 'done').length;
                 const roadmapInProgress = memberRoadmapAssigned.filter(t => t.status === 'in_progress').length;
                 const isEditing = editingUserId === member.id;
@@ -3022,10 +3030,7 @@ Scrivi SOLO la risposta rielaborata.`
 
                     {/* Roadmap Tasks for this person */}
                     {(() => {
-                      const memberRoadmapTasks = roadmapTasks.filter(t => 
-                        t.owner.toLowerCase().includes(member.name.toLowerCase()) ||
-                        t.owner.toLowerCase() === member.name.split(' ')[0].toLowerCase()
-                      );
+                      const memberRoadmapTasks = getRoadmapTasksForMember(member.name);
                       if (memberRoadmapTasks.length === 0) return null;
                       
                       return (
@@ -3043,23 +3048,36 @@ Scrivi SOLO la risposta rielaborata.`
                                 }`}
                               >
                                 <div className="flex items-center justify-between">
-                                  <span className="text-slate-300">{task.task_id} - {task.title}</span>
-                                  <div className="flex gap-1">
+                                  <span className="text-slate-300 flex-1">{task.task_id} - {task.title}</span>
+                                  <div className="flex gap-1 ml-2">
                                     <button 
                                       onClick={() => updateRoadmapTaskStatus(task.task_id, 'todo')}
-                                      className={`px-1 rounded ${task.status === 'todo' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      className={`px-1.5 py-0.5 rounded ${task.status === 'todo' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      title="Da fare"
                                     >○</button>
                                     <button 
                                       onClick={() => updateRoadmapTaskStatus(task.task_id, 'in_progress')}
-                                      className={`px-1 rounded ${task.status === 'in_progress' ? 'bg-amber-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      className={`px-1.5 py-0.5 rounded ${task.status === 'in_progress' ? 'bg-amber-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      title="In corso"
                                     >⏳</button>
                                     <button 
+                                      onClick={() => updateRoadmapTaskStatus(task.task_id, 'blocked')}
+                                      className={`px-1.5 py-0.5 rounded ${task.status === 'blocked' ? 'bg-red-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      title="Bloccato"
+                                    >🚫</button>
+                                    <button 
                                       onClick={() => updateRoadmapTaskStatus(task.task_id, 'done')}
-                                      className={`px-1 rounded ${task.status === 'done' ? 'bg-green-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      className={`px-1.5 py-0.5 rounded ${task.status === 'done' ? 'bg-green-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                      title="Completato"
                                     >✓</button>
                                   </div>
                                 </div>
                                 <p className="text-slate-500 text-[10px] mt-1">📦 {task.output}</p>
+                                {task.updated_by && (
+                                  <p className="text-[10px] text-slate-600 mt-0.5">
+                                    ✏️ {task.updated_by} • {task.updated_at && new Date(task.updated_at).toLocaleString('it-IT')}
+                                  </p>
+                                )}
                               </div>
                             ))}
                           </div>
