@@ -3,7 +3,7 @@
 // ============================================
 // BETSTARTERS DISCOVERY COCKPIT
 // Production-ready for selfhosting
-// v1.3 - Team notes & ideas with publish to dashboard
+// v1.5 - AI rewrite notes, PDF export, custom tasks
 // ============================================
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -1140,6 +1140,77 @@ Rispondi SOLO in JSON:
     }
   };
 
+  const [rewritingNoteId, setRewritingNoteId] = useState<string | null>(null);
+
+  const rewriteNote = async (noteId: string) => {
+    const note = teamNotes.find(n => n.id === noteId);
+    if (!note || !CLAUDE_API_KEY) {
+      alert('API key Claude non configurata');
+      return;
+    }
+
+    setRewritingNoteId(noteId);
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': CLAUDE_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-3-haiku-20240307',
+          max_tokens: 500,
+          messages: [{
+            role: 'user',
+            content: `Riscrivi questa nota in modo più professionale e strutturato. 
+REGOLE FERREE:
+- NON inventare informazioni
+- NON aggiungere dettagli non presenti
+- Mantieni TUTTI i fatti e nomi menzionati
+- Solo riformulare per chiarezza
+- Usa frasi complete e punteggiatura corretta
+- Se ci sono elenchi impliciti, rendili espliciti
+- Massimo 2-3 frasi in più dell'originale
+
+NOTA ORIGINALE:
+"${note.content}"
+
+Rispondi SOLO con la nota riscritta, niente altro.`
+          }]
+        })
+      });
+
+      const data = await response.json();
+      const rewritten = data.content?.[0]?.text?.trim();
+
+      if (rewritten) {
+        // Update in DB
+        const { error } = await supabase
+          .from('team_notes')
+          .update({
+            content: rewritten,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', noteId);
+
+        if (!error) {
+          setTeamNotes(prev => prev.map(n => 
+            n.id === noteId 
+              ? { ...n, content: rewritten, updated_at: new Date().toISOString() }
+              : n
+          ));
+        }
+      }
+    } catch (e) {
+      console.error('Rewrite error:', e);
+      alert('Errore durante la rielaborazione');
+    }
+
+    setRewritingNoteId(null);
+  };
+
   const answerQuestion = async (questionId: string) => {
     if (!answerDraft.trim()) return;
 
@@ -1355,6 +1426,242 @@ Rispondi SOLO in JSON:
     return answerHistory.filter(h => h.question_id === questionId).sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
+  };
+
+  // ==========================================
+  // PDF EXPORT FUNCTION
+  // ==========================================
+
+  const exportToPDF = () => {
+    const today = new Date().toLocaleDateString('it-IT');
+    const categories = [...new Set(questions.map(q => q.category))];
+    
+    // Build HTML content
+    let html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>BetStarters Discovery Report - ${today}</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; line-height: 1.4; color: #1e293b; padding: 20px; }
+          h1 { font-size: 20px; color: #0d9488; margin-bottom: 5px; }
+          h2 { font-size: 14px; color: #0d9488; margin: 20px 0 10px; padding-bottom: 5px; border-bottom: 2px solid #0d9488; }
+          h3 { font-size: 12px; color: #334155; margin: 15px 0 8px; }
+          .header { border-bottom: 3px solid #0d9488; padding-bottom: 15px; margin-bottom: 20px; }
+          .meta { color: #64748b; font-size: 10px; }
+          .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 15px 0; }
+          .kpi { background: #f1f5f9; padding: 10px; border-radius: 5px; text-align: center; }
+          .kpi-value { font-size: 18px; font-weight: bold; color: #0d9488; }
+          .kpi-label { font-size: 9px; color: #64748b; text-transform: uppercase; }
+          .section { margin: 20px 0; page-break-inside: avoid; }
+          .question { background: #f8fafc; padding: 8px; margin: 5px 0; border-left: 3px solid #0d9488; }
+          .question.critical { border-left-color: #dc2626; background: #fef2f2; }
+          .question.unanswered { border-left-color: #f59e0b; background: #fffbeb; }
+          .answer { color: #059669; margin-top: 5px; }
+          .no-answer { color: #dc2626; font-style: italic; }
+          .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9px; margin-left: 5px; }
+          .badge-critical { background: #fecaca; color: #991b1b; }
+          .badge-high { background: #fed7aa; color: #9a3412; }
+          .badge-medium { background: #fef3c7; color: #92400e; }
+          .member-card { background: #f8fafc; padding: 12px; margin: 10px 0; border-radius: 5px; border: 1px solid #e2e8f0; }
+          .member-name { font-size: 13px; font-weight: bold; color: #1e293b; }
+          .member-meta { color: #64748b; font-size: 10px; margin-bottom: 8px; }
+          .task-list { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0; }
+          .task { background: #e2e8f0; padding: 3px 8px; border-radius: 3px; font-size: 9px; }
+          .task.custom { background: #ccfbf1; }
+          .note { background: #f0fdfa; padding: 8px; margin: 5px 0; border-left: 3px solid #14b8a6; font-size: 10px; }
+          .blocker { background: #fef2f2; padding: 8px; margin: 5px 0; border-left: 3px solid #dc2626; }
+          .mention { background: #dbeafe; padding: 8px; margin: 5px 0; border-left: 3px solid #3b82f6; }
+          table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 10px; }
+          th, td { padding: 6px; text-align: left; border: 1px solid #e2e8f0; }
+          th { background: #0d9488; color: white; }
+          tr:nth-child(even) { background: #f8fafc; }
+          .page-break { page-break-before: always; }
+          .footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 9px; text-align: center; }
+          @media print { body { padding: 0; } .page-break { page-break-before: always; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>🎯 BetStarters Discovery Report</h1>
+          <p class="meta">Generato il ${today} • Progetto: ${project?.name || 'BetStarters'}</p>
+        </div>
+
+        <!-- KPI Summary -->
+        <div class="kpi-grid">
+          <div class="kpi">
+            <div class="kpi-value">${project?.current_projects_month || 0}/${project?.target_projects_month || 8}</div>
+            <div class="kpi-label">Progetti/Mese</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-value">${project?.ttd_current || '—'}/${project?.ttd_target || 30}</div>
+            <div class="kpi-label">TTD (giorni)</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-value">${answeredQuestions.length}/${questions.length}</div>
+            <div class="kpi-label">Discovery</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-value">${criticalGaps.length}</div>
+            <div class="kpi-label">Gap Critici</div>
+          </div>
+        </div>
+    `;
+
+    // Discovery Questions by Category
+    html += `<h2>📋 Discovery Questions</h2>`;
+    categories.forEach(cat => {
+      const catQuestions = questions.filter(q => q.category === cat);
+      const answered = catQuestions.filter(q => q.answered).length;
+      html += `
+        <h3>${cat} (${answered}/${catQuestions.length})</h3>
+      `;
+      catQuestions.forEach(q => {
+        const priorityBadge = q.priority === 'critical' ? '<span class="badge badge-critical">CRITICAL</span>' :
+                             q.priority === 'high' ? '<span class="badge badge-high">HIGH</span>' : '';
+        const className = q.priority === 'critical' && !q.answered ? 'question critical' : 
+                         !q.answered ? 'question unanswered' : 'question';
+        html += `
+          <div class="${className}">
+            <strong>${q.text}</strong> ${priorityBadge}
+            ${q.answered 
+              ? `<div class="answer">✓ ${q.answer}${q.mentioned_users?.length ? ` <em>(👥 ${q.mentioned_users.map(id => users.find(u => u.id === id)?.name).filter(Boolean).join(', ')})</em>` : ''}</div>` 
+              : '<div class="no-answer">⚠ Non risposta</div>'}
+          </div>
+        `;
+      });
+    });
+
+    // Team Members Section
+    html += `<h2 class="page-break">👥 Team Members</h2>`;
+    teamMembers.forEach(member => {
+      const memberTasks = userTasks.filter(t => t.user_id === member.id);
+      const memberBlockers = blockers.filter(b => b.user_id === member.id);
+      const memberMentions = getQuestionsAboutUser(member.id);
+      const memberNotes = teamNotes.filter(n => n.user_id === member.id && n.status === 'published');
+      const memberHistory = getAnswerHistoryForUser(member.id);
+
+      html += `
+        <div class="member-card">
+          <div class="member-name">${member.name}</div>
+          <div class="member-meta">
+            ${member.market_focus || '—'} • ${member.work_type || 'N/A'} • ${member.role}
+          </div>
+          
+          ${memberTasks.length > 0 ? `
+            <h4 style="font-size: 10px; margin-top: 8px;">📋 Task (${memberTasks.length})</h4>
+            <div class="task-list">
+              ${memberTasks.map(t => `<span class="task${t.is_custom ? ' custom' : ''}">${t.is_custom ? '✏️ ' : ''}${t.task_name}</span>`).join('')}
+            </div>
+          ` : ''}
+
+          ${memberMentions.length > 0 ? `
+            <h4 style="font-size: 10px; margin-top: 8px;">💬 Menzionato in (${memberMentions.length})</h4>
+            ${memberMentions.slice(0, 5).map(q => `
+              <div class="mention">
+                <strong>${q.text}</strong><br/>
+                <em>${q.answer?.substring(0, 100)}${(q.answer?.length || 0) > 100 ? '...' : ''}</em>
+              </div>
+            `).join('')}
+            ${memberMentions.length > 5 ? `<p style="color: #64748b; font-size: 9px;">+${memberMentions.length - 5} altre menzioni</p>` : ''}
+          ` : ''}
+
+          ${memberNotes.length > 0 ? `
+            <h4 style="font-size: 10px; margin-top: 8px;">📝 Note pubblicate (${memberNotes.length})</h4>
+            ${memberNotes.map(n => `
+              <div class="note">
+                ${n.content}
+                <br/><span style="color: #64748b;">${n.published_at ? new Date(n.published_at).toLocaleDateString('it-IT') : ''}</span>
+              </div>
+            `).join('')}
+          ` : ''}
+
+          ${memberBlockers.length > 0 ? `
+            <h4 style="font-size: 10px; margin-top: 8px;">🚨 Blockers (${memberBlockers.length})</h4>
+            ${memberBlockers.map(b => `
+              <div class="blocker">
+                <strong>${b.title}</strong> - ${b.status}
+                ${b.description ? `<br/><em>${b.description}</em>` : ''}
+              </div>
+            `).join('')}
+          ` : ''}
+
+          ${memberHistory.length > 0 ? `
+            <h4 style="font-size: 10px; margin-top: 8px;">🕐 Storico menzioni (${memberHistory.length})</h4>
+            <table>
+              <tr><th>Data</th><th>Fonte</th><th>Risposta</th></tr>
+              ${memberHistory.slice(0, 10).map(h => {
+                const q = questions.find(qu => qu.id === h.question_id);
+                return `<tr>
+                  <td>${new Date(h.created_at).toLocaleDateString('it-IT')}</td>
+                  <td>${h.source === 'stt' ? '🎤 STT' : h.source === 'stt_correction' ? '🔄 Corr' : '✏️ Man'}</td>
+                  <td>${h.answer.substring(0, 80)}${h.answer.length > 80 ? '...' : ''}</td>
+                </tr>`;
+              }).join('')}
+            </table>
+          ` : ''}
+        </div>
+      `;
+    });
+
+    // Blockers Summary
+    const openBlockers = blockers.filter(b => b.status !== 'resolved');
+    if (openBlockers.length > 0) {
+      html += `
+        <h2>🚨 Blockers Aperti (${openBlockers.length})</h2>
+        <table>
+          <tr><th>Titolo</th><th>Tipo</th><th>Impatto</th><th>Status</th><th>Segnalato da</th></tr>
+          ${openBlockers.map(b => {
+            const reporter = users.find(u => u.id === b.user_id);
+            return `<tr>
+              <td>${b.title}</td>
+              <td>${b.blocker_type}</td>
+              <td>${b.impact}</td>
+              <td>${b.status}</td>
+              <td>${reporter?.name || '—'}</td>
+            </tr>`;
+          }).join('')}
+        </table>
+      `;
+    }
+
+    // STT Sessions Summary
+    if (sttExtractions.length > 0) {
+      html += `
+        <h2>🎤 Dati STT Estratti (${sttExtractions.length})</h2>
+        <table>
+          <tr><th>Data</th><th>Confidence</th><th>Estrazione</th></tr>
+          ${sttExtractions.slice(0, 20).map(e => `
+            <tr>
+              <td>${e.timestamp || '—'}</td>
+              <td>${e.confidence ? Math.round(e.confidence * 100) + '%' : '—'}</td>
+              <td>${JSON.stringify(e).substring(0, 100)}...</td>
+            </tr>
+          `).join('')}
+        </table>
+      `;
+    }
+
+    // Footer
+    html += `
+        <div class="footer">
+          BetStarters Discovery Cockpit • Report generato automaticamente • ${today}
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Open print window
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.onload = () => {
+        printWindow.print();
+      };
+    }
   };
 
   // ==========================================
@@ -2257,6 +2564,14 @@ Rispondi SOLO in JSON:
                                               <Button size="sm" variant="ghost" onClick={() => setEditingNoteId(note.id)}>
                                                 ✏️
                                               </Button>
+                                              <Button 
+                                                size="sm" 
+                                                variant="ghost" 
+                                                onClick={() => rewriteNote(note.id)}
+                                                disabled={rewritingNoteId === note.id}
+                                              >
+                                                {rewritingNoteId === note.id ? '⏳' : '✨'} Rielabora
+                                              </Button>
                                               <Button size="sm" variant="ghost" onClick={() => publishNote(note.id)}>
                                                 🚀 Pubblica
                                               </Button>
@@ -2501,7 +2816,7 @@ Rispondi SOLO in JSON:
                 }}>
                   <Icons.Download /> Esporta JSON
                 </Button>
-                <Button variant="secondary" onClick={() => alert('PDF export coming soon')}>
+                <Button variant="secondary" onClick={exportToPDF}>
                   <Icons.Download /> Esporta PDF
                 </Button>
               </div>
