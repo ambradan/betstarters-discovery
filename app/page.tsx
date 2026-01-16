@@ -23,7 +23,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 type UserRole = 'owner' | 'team_member' | 'consultant';
 type WorkType = 'fulltime' | 'parttime' | null;
-type ViewMode = 'dashboard' | 'call' | 'team' | 'markets' | 'reports' | 'settings' | 'owner_private';
+type ViewMode = 'dashboard' | 'call' | 'team' | 'markets' | 'reports' | 'settings' | 'owner_private' | 'roadmap';
 
 interface AppUser {
   id: string;
@@ -119,6 +119,65 @@ interface TeamNote {
   created_at: string;
   updated_at: string;
 }
+
+interface RoadmapTask {
+  id: string;
+  phase: number;
+  task_id: string;
+  title: string;
+  output: string;
+  owner: string;
+  status: 'todo' | 'in_progress' | 'done' | 'blocked';
+  notes?: string;
+  due_date?: string;
+  completed_at?: string;
+  created_at: string;
+}
+
+// Roadmap phases and tasks data
+const ROADMAP_PHASES = [
+  { phase: 1, name: 'Fondamenta', weeks: '1-2', color: 'red' },
+  { phase: 2, name: 'Tracking & Visibilità', weeks: '3-4', color: 'amber' },
+  { phase: 3, name: 'Market Intelligence', weeks: '5-6', color: 'blue' },
+  { phase: 4, name: 'Ottimizzazione Processo', weeks: '7-8', color: 'purple' },
+  { phase: 5, name: 'Metriche & Governance', weeks: '9-10', color: 'teal' },
+  { phase: 6, name: 'Preparazione Agent AI', weeks: '11-12', color: 'green' },
+];
+
+const ROADMAP_TASKS_TEMPLATE = [
+  // Phase 1
+  { phase: 1, task_id: '1.1', title: 'Definire criteri qualificazione lead oggettivi', output: 'Checklist con punteggio', owner: 'Marco' },
+  { phase: 1, task_id: '1.2', title: 'Mappare funnel: Lead → Demo → Proposal → Close con %', output: 'Documento + Kanban aggiornato', owner: 'Anita' },
+  { phase: 1, task_id: '1.3', title: 'Definire deal size minime per tier', output: 'Tabella pricing 3 livelli', owner: 'Marco' },
+  { phase: 1, task_id: '1.4', title: 'Creare template due diligence prospect', output: 'Checklist verifiche', owner: 'Consultant' },
+  { phase: 1, task_id: '1.5', title: 'Definire chi decide cosa quando Marco assente', output: 'Matrice RACI', owner: 'Marco' },
+  // Phase 2
+  { phase: 2, task_id: '2.1', title: 'Implementare tracking provenienza lead', output: 'Campo in CRM + report', owner: 'Consultant' },
+  { phase: 2, task_id: '2.2', title: 'Creare dashboard pipeline real-time', output: 'Dashboard (Kanban + metriche)', owner: 'Consultant' },
+  { phase: 2, task_id: '2.3', title: 'Definire KPI individuali per ogni ruolo', output: 'Documento obiettivi', owner: 'Marco' },
+  { phase: 2, task_id: '2.4', title: 'Setup routine daily/weekly lead review', output: 'Meeting ricorrente + template', owner: 'Anita' },
+  { phase: 2, task_id: '2.5', title: 'Sistema notifiche lead con obbligo check', output: 'Workflow Slack/CRM', owner: 'Consultant' },
+  // Phase 3
+  { phase: 3, task_id: '3.1', title: 'Ricerca e analisi competitor', output: 'Report competitive', owner: 'Consultant' },
+  { phase: 3, task_id: '3.2', title: 'Creare database mercati prioritari con requisiti', output: 'Schede paese Latam', owner: 'Consultant' },
+  { phase: 3, task_id: '3.3', title: 'Valutazione tool Blask per Gianmarco', output: 'Report pro/contro + raccomandazione', owner: 'Consultant' },
+  { phase: 3, task_id: '3.4', title: 'Setup fonte dati mercato automatizzata', output: 'Feed o report periodico', owner: 'Consultant' },
+  // Phase 4
+  { phase: 4, task_id: '4.1', title: 'Standardizzare sequenza Demo → Proposal', output: 'Playbook sales', owner: 'Glenn' },
+  { phase: 4, task_id: '4.2', title: 'Creare template negoziazione', output: 'Documento FAQ + obiezioni', owner: 'Anita' },
+  { phase: 4, task_id: '4.3', title: 'Definire trigger automatici follow-up', output: 'Workflow CRM', owner: 'Consultant' },
+  { phase: 4, task_id: '4.4', title: 'Creare onboarding checklist cliente', output: 'Documento + task Jira', owner: 'Mauro' },
+  // Phase 5
+  { phase: 5, task_id: '5.1', title: 'Definire metriche successo 3 mesi', output: 'Documento con target', owner: 'Marco' },
+  { phase: 5, task_id: '5.2', title: 'Definire metriche successo 12 mesi', output: 'Documento con target', owner: 'Marco' },
+  { phase: 5, task_id: '5.3', title: 'Setup reporting automatico settimanale', output: 'Report template', owner: 'Consultant' },
+  { phase: 5, task_id: '5.4', title: 'Creare sistema verbalizzazione decisioni', output: 'Template + archivio', owner: 'Consultant' },
+  // Phase 6
+  { phase: 6, task_id: '6.1', title: 'Documentare tutte le regole qualificazione', output: 'Knowledge base strutturata', owner: 'Consultant' },
+  { phase: 6, task_id: '6.2', title: 'Loggare ogni decisione con rationale', output: 'Sistema audit trail', owner: 'Consultant' },
+  { phase: 6, task_id: '6.3', title: 'Raccogliere dati storici per training', output: 'Dataset pulito', owner: 'Consultant' },
+  { phase: 6, task_id: '6.4', title: 'Valutare se criteri sufficienti per automazione', output: 'Report go/no-go', owner: 'Consultant' },
+];
 
 interface MarketIntel {
   code: string;
@@ -474,6 +533,7 @@ export default function DiscoveryCockpit() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [answerHistory, setAnswerHistory] = useState<AnswerHistory[]>([]);
   const [teamNotes, setTeamNotes] = useState<TeamNote[]>([]);
+  const [roadmapTasks, setRoadmapTasks] = useState<RoadmapTask[]>([]);
 
   // UI State
   const [loading, setLoading] = useState(true);
@@ -567,6 +627,21 @@ export default function DiscoveryCockpit() {
       // Load team notes
       const { data: notesData } = await supabase.from('team_notes').select('*').order('created_at', { ascending: false });
       if (notesData) setTeamNotes(notesData);
+
+      // Load roadmap tasks
+      const { data: roadmapData } = await supabase.from('roadmap_tasks').select('*').order('task_id', { ascending: true });
+      if (roadmapData) {
+        setRoadmapTasks(roadmapData);
+      } else {
+        // Initialize with template if empty
+        const initialTasks = ROADMAP_TASKS_TEMPLATE.map(t => ({
+          ...t,
+          id: `${t.task_id}`,
+          status: 'todo' as const,
+          created_at: new Date().toISOString()
+        }));
+        setRoadmapTasks(initialTasks);
+      }
 
     } catch (error) {
       console.error('Error loading data:', error);
@@ -1327,6 +1402,55 @@ Scrivi SOLO la risposta rielaborata.`
     alert('Rielaborazione completata!');
   };
 
+  // Roadmap task management
+  const updateRoadmapTaskStatus = async (taskId: string, status: RoadmapTask['status']) => {
+    const task = roadmapTasks.find(t => t.task_id === taskId);
+    if (!task) return;
+
+    const updates: Partial<RoadmapTask> = { 
+      status,
+      completed_at: status === 'done' ? new Date().toISOString() : undefined
+    };
+
+    // Try to update in DB
+    const { error } = await supabase
+      .from('roadmap_tasks')
+      .upsert({
+        ...task,
+        ...updates,
+        id: task.id || taskId
+      });
+
+    // Update local state regardless
+    setRoadmapTasks(prev => prev.map(t => 
+      t.task_id === taskId ? { ...t, ...updates } : t
+    ));
+  };
+
+  const initializeRoadmapTasks = async () => {
+    // Insert all template tasks into DB
+    const tasks = ROADMAP_TASKS_TEMPLATE.map(t => ({
+      id: crypto.randomUUID(),
+      ...t,
+      status: 'todo',
+      created_at: new Date().toISOString()
+    }));
+
+    const { error } = await supabase.from('roadmap_tasks').insert(tasks);
+    if (!error) {
+      setRoadmapTasks(tasks as RoadmapTask[]);
+    }
+  };
+
+  // Roadmap stats for dashboard
+  const roadmapStats = {
+    total: roadmapTasks.length || ROADMAP_TASKS_TEMPLATE.length,
+    done: roadmapTasks.filter(t => t.status === 'done').length,
+    inProgress: roadmapTasks.filter(t => t.status === 'in_progress').length,
+    blocked: roadmapTasks.filter(t => t.status === 'blocked').length,
+    todo: roadmapTasks.filter(t => t.status === 'todo').length,
+  };
+
   const answerQuestion = async (questionId: string) => {
     if (!answerDraft.trim()) return;
 
@@ -1880,6 +2004,7 @@ Scrivi SOLO la risposta rielaborata.`
             { id: 'dashboard', icon: '📊', label: 'Dashboard', show: true },
             { id: 'call', icon: '📞', label: 'Call Mode', show: canViewAll },
             { id: 'team', icon: '👥', label: 'Team', show: true },
+            { id: 'roadmap', icon: '🎯', label: 'Roadmap', show: canViewAll },
             { id: 'markets', icon: '🌍', label: 'Markets', show: canViewAll },
             { id: 'reports', icon: '📄', label: 'Reports', show: canViewAll },
             { id: 'owner_private', icon: '🔒', label: 'Area Riservata', show: canViewOwnerData },
@@ -2133,6 +2258,75 @@ Scrivi SOLO la risposta rielaborata.`
                 </Card>
               );
             })()}
+
+            {/* Roadmap Progress Snapshot */}
+            <Card className="p-4 border-purple-700">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-purple-400">🎯 Roadmap Progress</h3>
+                <Button size="sm" variant="ghost" onClick={() => setView('roadmap')}>
+                  Vedi tutto →
+                </Button>
+              </div>
+              
+              {/* Progress bar */}
+              <div className="mb-4">
+                <div className="flex justify-between text-xs text-slate-400 mb-1">
+                  <span>{roadmapStats.done}/{roadmapStats.total} completati</span>
+                  <span>{Math.round((roadmapStats.done / roadmapStats.total) * 100)}%</span>
+                </div>
+                <div className="w-full bg-slate-700 rounded-full h-3">
+                  <div 
+                    className="bg-gradient-to-r from-green-500 to-teal-500 h-3 rounded-full transition-all"
+                    style={{ width: `${(roadmapStats.done / roadmapStats.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Phase progress */}
+              <div className="grid grid-cols-6 gap-2">
+                {ROADMAP_PHASES.map(phase => {
+                  const phaseTasks = roadmapTasks.filter(t => t.phase === phase.phase);
+                  const done = phaseTasks.filter(t => t.status === 'done').length;
+                  const total = phaseTasks.length || ROADMAP_TASKS_TEMPLATE.filter(t => t.phase === phase.phase).length;
+                  const pct = total > 0 ? (done / total) * 100 : 0;
+                  
+                  return (
+                    <div key={phase.phase} className="text-center">
+                      <div className={`w-full h-2 rounded bg-slate-700 mb-1`}>
+                        <div 
+                          className={`h-2 rounded ${
+                            pct === 100 ? 'bg-green-500' : 
+                            pct > 0 ? 'bg-amber-500' : 'bg-slate-600'
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500">F{phase.phase}</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Stats row */}
+              <div className="grid grid-cols-4 gap-2 mt-4 pt-4 border-t border-slate-700">
+                <div className="text-center">
+                  <p className="text-lg font-bold text-green-400">{roadmapStats.done}</p>
+                  <p className="text-xs text-slate-500">Done</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold text-amber-400">{roadmapStats.inProgress}</p>
+                  <p className="text-xs text-slate-500">In corso</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold text-red-400">{roadmapStats.blocked}</p>
+                  <p className="text-xs text-slate-500">Bloccati</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold text-slate-400">{roadmapStats.todo}</p>
+                  <p className="text-xs text-slate-500">Da fare</p>
+                </div>
+              </div>
+            </Card>
           </div>
         )}
 
@@ -2785,6 +2979,129 @@ Scrivi SOLO la risposta rielaborata.`
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* ========== ROADMAP VIEW ========== */}
+        {view === 'roadmap' && canViewAll && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-bold text-white">🎯 Roadmap Operativa</h2>
+                <p className="text-slate-400">Progresso: {roadmapStats.done}/{roadmapStats.total} task completati ({Math.round((roadmapStats.done / roadmapStats.total) * 100)}%)</p>
+              </div>
+              {roadmapTasks.length === 0 && (
+                <Button onClick={initializeRoadmapTasks}>
+                  🚀 Inizializza Roadmap
+                </Button>
+              )}
+            </div>
+
+            {/* Overall progress */}
+            <Card className="p-4">
+              <div className="flex justify-between text-sm text-slate-400 mb-2">
+                <span>Progresso totale</span>
+                <span>{roadmapStats.done} completati • {roadmapStats.inProgress} in corso • {roadmapStats.blocked} bloccati</span>
+              </div>
+              <div className="w-full bg-slate-700 rounded-full h-4">
+                <div 
+                  className="bg-gradient-to-r from-green-500 via-teal-500 to-blue-500 h-4 rounded-full transition-all"
+                  style={{ width: `${(roadmapStats.done / roadmapStats.total) * 100}%` }}
+                />
+              </div>
+            </Card>
+
+            {/* Phases */}
+            {ROADMAP_PHASES.map(phase => {
+              const phaseTasks = (roadmapTasks.length > 0 ? roadmapTasks : ROADMAP_TASKS_TEMPLATE.map(t => ({ ...t, status: 'todo' as const }))).filter(t => t.phase === phase.phase);
+              const done = phaseTasks.filter(t => t.status === 'done').length;
+              const total = phaseTasks.length;
+              const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+              
+              const phaseColors: Record<string, string> = {
+                red: 'border-red-500 bg-red-900/10',
+                amber: 'border-amber-500 bg-amber-900/10',
+                blue: 'border-blue-500 bg-blue-900/10',
+                purple: 'border-purple-500 bg-purple-900/10',
+                teal: 'border-teal-500 bg-teal-900/10',
+                green: 'border-green-500 bg-green-900/10',
+              };
+              
+              return (
+                <Card key={phase.phase} className={`p-4 ${phaseColors[phase.color] || ''}`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="font-semibold text-white">Fase {phase.phase}: {phase.name}</h3>
+                      <p className="text-xs text-slate-400">Settimane {phase.weeks}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-lg font-bold ${pct === 100 ? 'text-green-400' : 'text-slate-300'}`}>{pct}%</p>
+                      <p className="text-xs text-slate-500">{done}/{total} task</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    {phaseTasks.map(task => (
+                      <div 
+                        key={task.task_id}
+                        className={`p-3 rounded border-l-4 ${
+                          task.status === 'done' ? 'border-green-500 bg-green-900/20' :
+                          task.status === 'in_progress' ? 'border-amber-500 bg-amber-900/20' :
+                          task.status === 'blocked' ? 'border-red-500 bg-red-900/20' :
+                          'border-slate-500 bg-slate-800/50'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs text-slate-500 font-mono">{task.task_id}</span>
+                              <Badge variant={
+                                task.status === 'done' ? 'success' :
+                                task.status === 'in_progress' ? 'warning' :
+                                task.status === 'blocked' ? 'danger' : 'default'
+                              }>
+                                {task.status === 'done' ? '✓ Fatto' :
+                                 task.status === 'in_progress' ? '⏳ In corso' :
+                                 task.status === 'blocked' ? '🚫 Bloccato' : '○ Da fare'}
+                              </Badge>
+                            </div>
+                            <p className="text-sm text-white">{task.title}</p>
+                            <div className="flex items-center gap-4 mt-1">
+                              <span className="text-xs text-slate-400">📦 {task.output}</span>
+                              <span className="text-xs text-teal-400">👤 {task.owner}</span>
+                            </div>
+                          </div>
+                          
+                          {/* Status buttons */}
+                          <div className="flex gap-1">
+                            <button 
+                              onClick={() => updateRoadmapTaskStatus(task.task_id, 'todo')}
+                              className={`p-1 rounded text-xs ${task.status === 'todo' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                              title="Da fare"
+                            >○</button>
+                            <button 
+                              onClick={() => updateRoadmapTaskStatus(task.task_id, 'in_progress')}
+                              className={`p-1 rounded text-xs ${task.status === 'in_progress' ? 'bg-amber-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                              title="In corso"
+                            >⏳</button>
+                            <button 
+                              onClick={() => updateRoadmapTaskStatus(task.task_id, 'blocked')}
+                              className={`p-1 rounded text-xs ${task.status === 'blocked' ? 'bg-red-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                              title="Bloccato"
+                            >🚫</button>
+                            <button 
+                              onClick={() => updateRoadmapTaskStatus(task.task_id, 'done')}
+                              className={`p-1 rounded text-xs ${task.status === 'done' ? 'bg-green-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                              title="Fatto"
+                            >✓</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
 
