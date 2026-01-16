@@ -3073,9 +3073,9 @@ Scrivi SOLO la risposta rielaborata.`
                                   </div>
                                 </div>
                                 <p className="text-slate-500 text-[10px] mt-1">📦 {task.output}</p>
-                                {task.updated_by && (
+                                {'updated_by' in task && task.updated_by && (
                                   <p className="text-[10px] text-slate-600 mt-0.5">
-                                    ✏️ {task.updated_by} • {task.updated_at && new Date(task.updated_at).toLocaleString('it-IT')}
+                                    ✏️ {task.updated_by} • {'updated_at' in task && task.updated_at && new Date(task.updated_at).toLocaleString('it-IT')}
                                   </p>
                                 )}
                               </div>
@@ -3353,9 +3353,9 @@ Scrivi SOLO la risposta rielaborata.`
                               <span className="text-xs text-slate-400">📦 {task.output}</span>
                               <span className="text-xs text-teal-400">👤 {task.owner}</span>
                             </div>
-                            {task.updated_by && (
+                            {'updated_by' in task && task.updated_by && (
                               <p className="text-[10px] text-slate-500 mt-1">
-                                ✏️ Modificato da {task.updated_by} • {task.updated_at && new Date(task.updated_at).toLocaleString('it-IT')}
+                                ✏️ Modificato da {task.updated_by} • {'updated_at' in task && task.updated_at && new Date(task.updated_at).toLocaleString('it-IT')}
                               </p>
                             )}
                           </div>
