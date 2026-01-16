@@ -560,6 +560,7 @@ export default function DiscoveryCockpit() {
   const [roadmapChanges, setRoadmapChanges] = useState<RoadmapChange[]>([]);
   const [notifications, setNotifications] = useState<SystemNotification[]>([]);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [expandedNotesPerson, setExpandedNotesPerson] = useState<string | null>(null);
 
   // UI State
   const [loading, setLoading] = useState(true);
@@ -2378,46 +2379,73 @@ Scrivi SOLO la risposta rielaborata.`
               </Card>
             )}
 
-            {/* Team Notes - Published */}
+            {/* Team Notes - Published, Grouped by Person, Collapsible */}
             {(() => {
               const publishedNotes = teamNotes.filter(n => n.status === 'published');
               if (publishedNotes.length === 0) return null;
               
+              // Group notes by author
+              const notesByPerson = teamMembers.map(member => ({
+                member,
+                notes: publishedNotes.filter(n => n.user_id === member.id)
+              })).filter(g => g.notes.length > 0);
+              
+              // Also include owner notes
+              const ownerNotes = publishedNotes.filter(n => {
+                const author = users.find(u => u.id === n.user_id);
+                return author?.role === 'owner';
+              });
+              const owner = users.find(u => u.role === 'owner');
+              if (owner && ownerNotes.length > 0 && !notesByPerson.find(g => g.member.id === owner.id)) {
+                notesByPerson.unshift({ member: owner, notes: ownerNotes });
+              }
+              
               return (
                 <Card className="p-4 border-teal-700">
-                  <h3 className="font-semibold text-teal-400 mb-4">📝 Note del Team</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    {publishedNotes.slice(0, 6).map(note => {
-                      const author = users.find(u => u.id === note.user_id);
-                      return (
-                        <div 
-                          key={note.id} 
-                          className="p-3 bg-teal-900/20 rounded border-l-2 border-teal-500 hover:bg-teal-900/30 cursor-pointer transition-colors"
-                          onClick={() => {
-                            if (author) {
-                              setEditingUserId(author.id);
-                              setView('team');
-                            }
-                          }}
-                        >
-                          <p className="text-sm text-teal-200">{note.content}</p>
-                          <div className="flex items-center justify-between mt-2">
-                            <span className="text-xs text-slate-400">
-                              {author?.name} • {note.published_at && new Date(note.published_at).toLocaleDateString('it-IT')}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-semibold text-teal-400">📝 Note del Team ({publishedNotes.length})</h3>
+                    <Button size="sm" variant="ghost" onClick={() => setView('team')}>
+                      Vedi tutto →
+                    </Button>
                   </div>
-                  {publishedNotes.length > 6 && (
-                    <button 
-                      className="text-xs text-teal-400 mt-3 text-center w-full hover:underline"
-                      onClick={() => setView('team')}
-                    >
-                      +{publishedNotes.length - 6} altre note • Vai su Team per vedere tutto →
-                    </button>
-                  )}
+                  
+                  <div className="space-y-2">
+                    {notesByPerson.map(({ member, notes }) => (
+                      <div key={member.id} className="border border-slate-700 rounded">
+                        <button
+                          onClick={() => setExpandedNotesPerson(expandedNotesPerson === member.id ? null : member.id)}
+                          className="w-full flex items-center justify-between p-2 hover:bg-slate-700/30 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                              member.role === 'owner' ? 'bg-amber-600' : 'bg-slate-600'
+                            }`}>
+                              {member.name.charAt(0)}
+                            </div>
+                            <span className="text-sm text-white">{member.name}</span>
+                            <Badge variant="info">{notes.length}</Badge>
+                          </div>
+                          <span className="text-slate-400">{expandedNotesPerson === member.id ? '▼' : '▶'}</span>
+                        </button>
+                        
+                        {expandedNotesPerson === member.id && (
+                          <div className="p-2 pt-0 space-y-2">
+                            {notes.map(note => (
+                              <div 
+                                key={note.id}
+                                className="p-2 bg-teal-900/20 rounded border-l-2 border-teal-500 text-sm"
+                              >
+                                <p className="text-teal-200">{note.content.length > 150 ? note.content.substring(0, 150) + '...' : note.content}</p>
+                                <p className="text-[10px] text-slate-500 mt-1">
+                                  {note.published_at && new Date(note.published_at).toLocaleDateString('it-IT')}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </Card>
               );
             })()}
@@ -2964,6 +2992,53 @@ Scrivi SOLO la risposta rielaborata.`
                         </div>
                       )}
                     </div>
+
+                    {/* Roadmap Tasks for this person */}
+                    {(() => {
+                      const memberRoadmapTasks = roadmapTasks.filter(t => 
+                        t.owner.toLowerCase().includes(member.name.toLowerCase()) ||
+                        t.owner.toLowerCase() === member.name.split(' ')[0].toLowerCase()
+                      );
+                      if (memberRoadmapTasks.length === 0) return null;
+                      
+                      return (
+                        <div className="mb-4">
+                          <p className="text-xs text-slate-400 uppercase mb-2">🎯 Roadmap assegnata ({memberRoadmapTasks.length})</p>
+                          <div className="space-y-1">
+                            {memberRoadmapTasks.map(task => (
+                              <div 
+                                key={task.task_id}
+                                className={`p-2 rounded text-xs border-l-2 ${
+                                  task.status === 'done' ? 'border-green-500 bg-green-900/20' :
+                                  task.status === 'in_progress' ? 'border-amber-500 bg-amber-900/20' :
+                                  task.status === 'blocked' ? 'border-red-500 bg-red-900/20' :
+                                  'border-slate-500 bg-slate-800/50'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="text-slate-300">{task.task_id} - {task.title}</span>
+                                  <div className="flex gap-1">
+                                    <button 
+                                      onClick={() => updateRoadmapTaskStatus(task.task_id, 'todo')}
+                                      className={`px-1 rounded ${task.status === 'todo' ? 'bg-slate-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                    >○</button>
+                                    <button 
+                                      onClick={() => updateRoadmapTaskStatus(task.task_id, 'in_progress')}
+                                      className={`px-1 rounded ${task.status === 'in_progress' ? 'bg-amber-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                    >⏳</button>
+                                    <button 
+                                      onClick={() => updateRoadmapTaskStatus(task.task_id, 'done')}
+                                      className={`px-1 rounded ${task.status === 'done' ? 'bg-green-600 text-white' : 'text-slate-500 hover:bg-slate-700'}`}
+                                    >✓</button>
+                                  </div>
+                                </div>
+                                <p className="text-slate-500 text-[10px] mt-1">📦 {task.output}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Team Notes & Ideas */}
                     {(canViewAll || currentUser?.id === member.id) && (
