@@ -657,10 +657,10 @@ export default function DiscoveryCockpit() {
 
       // Load roadmap tasks
       const { data: roadmapData } = await supabase.from('roadmap_tasks').select('*').order('task_id', { ascending: true });
-      if (roadmapData) {
+      if (roadmapData && roadmapData.length > 0) {
         setRoadmapTasks(roadmapData);
       } else {
-        // Initialize with template if empty
+        // Initialize with template if DB is empty
         const initialTasks = ROADMAP_TASKS_TEMPLATE.map(t => ({
           ...t,
           id: `${t.task_id}`,
