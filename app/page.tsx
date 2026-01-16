@@ -1617,7 +1617,7 @@ Rispondi SOLO con la nota riscritta, niente altro.`
             const reporter = users.find(u => u.id === b.user_id);
             return `<tr>
               <td>${b.title}</td>
-              <td>${b.blocker_type}</td>
+              <td>${b.type}</td>
               <td>${b.impact}</td>
               <td>${b.status}</td>
               <td>${reporter?.name || '—'}</td>
