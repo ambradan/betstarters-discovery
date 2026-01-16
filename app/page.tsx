@@ -2599,9 +2599,19 @@ Rispondi SOLO con la nota riscritta, niente altro.`
                                           {note.published_at && new Date(note.published_at).toLocaleDateString('it-IT')}
                                         </span>
                                         {(currentUser?.id === member.id || isGodMode) && (
-                                          <Button size="sm" variant="ghost" onClick={() => deleteNote(note.id)}>
-                                            🗑️
-                                          </Button>
+                                          <div className="flex gap-1">
+                                            <Button 
+                                              size="sm" 
+                                              variant="ghost" 
+                                              onClick={() => rewriteNote(note.id)}
+                                              disabled={rewritingNoteId === note.id}
+                                            >
+                                              {rewritingNoteId === note.id ? '⏳' : '✨'}
+                                            </Button>
+                                            <Button size="sm" variant="ghost" onClick={() => deleteNote(note.id)}>
+                                              🗑️
+                                            </Button>
+                                          </div>
                                         )}
                                       </div>
                                     </div>
